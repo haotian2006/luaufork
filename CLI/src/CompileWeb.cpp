@@ -503,6 +503,9 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
             output = bcb.dumpSourceRemarks();
             break;
         case CompileFormat::Binary:
+            printf("Binary format Ran");
+            fwrite(bcb.getBytecode().data(), 1, bcb.getBytecode().size(), stdout);
+            printf("%zu\n", bcb.getBytecode().size());
             output = bcb.getBytecode().data();
             break;
         case CompileFormat::Codegen:
