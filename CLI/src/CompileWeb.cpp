@@ -574,7 +574,7 @@ std::vector<std::string> splitArgs(const std::string& input)
     return args;
 }
 
-const char* exportCompile(const char* input, const char* sourceCode)
+extern "C" const char* exportCompile(const char* input, const char* sourceCode)
 {
     std::vector<std::string> args = splitArgs(input);
 
