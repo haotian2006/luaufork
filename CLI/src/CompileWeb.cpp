@@ -2,7 +2,7 @@
 #include "lua.h"
 #include "lualib.h"
 
-#include "Luau/CodeGen.h"
+// #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/Parser.h"
@@ -105,22 +105,22 @@ static void reportError(const char* name, const Luau::CompileError& error)
     report(name, error.getLocation(), "CompileError", error.what());
 }
 
-static std::string getCodegenAssembly(
-    const char* name,
-    const std::string& bytecode,
-    Luau::CodeGen::AssemblyOptions options,
-    Luau::CodeGen::LoweringStats* stats
-)
-{
-    std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
-    lua_State* L = globalState.get();
+// static std::string getCodegenAssembly(
+//     const char* name,
+//     const std::string& bytecode,
+//     Luau::CodeGen::AssemblyOptions options,
+//     Luau::CodeGen::LoweringStats* stats
+// )
+// {
+//     std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
+//     lua_State* L = globalState.get();
 
-    if (luau_load(L, name, bytecode.data(), bytecode.size(), 0) == 0)
-        return Luau::CodeGen::getAssembly(L, -1, options, stats);
+//     if (luau_load(L, name, bytecode.data(), bytecode.size(), 0) == 0)
+//         return Luau::CodeGen::getAssembly(L, -1, options, stats);
 
-    fprintf(stderr, "Error loading bytecode %s\n", name);
-    return "";
-}
+//     fprintf(stderr, "Error loading bytecode %s\n", name);
+//     return "";
+// }
 
 static void annotateInstruction(void* context, std::string& text, int fid, int instpos)
 {
@@ -142,7 +142,7 @@ struct CompileStats
     double compileTime;
     double codegenTime;
 
-    Luau::CodeGen::LoweringStats lowerStats;
+    //Luau::CodeGen::LoweringStats lowerStats;
 
     CompileStats& operator+=(const CompileStats& that)
     {
@@ -155,7 +155,7 @@ struct CompileStats
         this->parseTime += that.parseTime;
         this->compileTime += that.compileTime;
         this->codegenTime += that.codegenTime;
-        this->lowerStats += that.lowerStats;
+        //this->lowerStats += that.lowerStats;
 
         return *this;
     }
@@ -172,112 +172,112 @@ struct CompileStats
 #define WRITE_PAIR(INDENT, NAME, FORMAT) fprintf(fp, INDENT "\"" #NAME "\": " FORMAT, stats.NAME)
 #define WRITE_PAIR_STRING(INDENT, NAME, FORMAT) fprintf(fp, INDENT "\"" #NAME "\": " FORMAT, stats.NAME.c_str())
 
-void serializeFunctionStats(FILE* fp, const Luau::CodeGen::FunctionStats& stats)
-{
-    fprintf(fp, "                {\n");
-    WRITE_PAIR_STRING("                    ", name, "\"%s\",\n");
-    WRITE_PAIR("                    ", line, "%d,\n");
-    WRITE_PAIR("                    ", bcodeCount, "%u,\n");
-    WRITE_PAIR("                    ", irCount, "%u,\n");
-    WRITE_PAIR("                    ", asmCount, "%u,\n");
-    WRITE_PAIR("                    ", asmSize, "%u,\n");
+// void serializeFunctionStats(FILE* fp, const Luau::CodeGen::FunctionStats& stats)
+// {
+//     fprintf(fp, "                {\n");
+//     WRITE_PAIR_STRING("                    ", name, "\"%s\",\n");
+//     WRITE_PAIR("                    ", line, "%d,\n");
+//     WRITE_PAIR("                    ", bcodeCount, "%u,\n");
+//     WRITE_PAIR("                    ", irCount, "%u,\n");
+//     WRITE_PAIR("                    ", asmCount, "%u,\n");
+//     WRITE_PAIR("                    ", asmSize, "%u,\n");
 
-    WRITE_NAME("                    ", bytecodeSummary);
-    const size_t nestingLimit = stats.bytecodeSummary.size();
+//     WRITE_NAME("                    ", bytecodeSummary);
+//     const size_t nestingLimit = stats.bytecodeSummary.size();
 
-    if (nestingLimit == 0)
-        fprintf(fp, "[]");
-    else
-    {
-        fprintf(fp, "[\n");
-        for (size_t i = 0; i < nestingLimit; ++i)
-        {
-            const std::vector<unsigned>& counts = stats.bytecodeSummary[i];
-            fprintf(fp, "                        [");
-            for (size_t j = 0; j < counts.size(); ++j)
-            {
-                fprintf(fp, "%u", counts[j]);
-                if (j < counts.size() - 1)
-                    fprintf(fp, ", ");
-            }
-            fprintf(fp, "]");
-            if (i < stats.bytecodeSummary.size() - 1)
-                fprintf(fp, ",\n");
-        }
-        fprintf(fp, "\n                    ]");
-    }
+//     if (nestingLimit == 0)
+//         fprintf(fp, "[]");
+//     else
+//     {
+//         fprintf(fp, "[\n");
+//         for (size_t i = 0; i < nestingLimit; ++i)
+//         {
+//             const std::vector<unsigned>& counts = stats.bytecodeSummary[i];
+//             fprintf(fp, "                        [");
+//             for (size_t j = 0; j < counts.size(); ++j)
+//             {
+//                 fprintf(fp, "%u", counts[j]);
+//                 if (j < counts.size() - 1)
+//                     fprintf(fp, ", ");
+//             }
+//             fprintf(fp, "]");
+//             if (i < stats.bytecodeSummary.size() - 1)
+//                 fprintf(fp, ",\n");
+//         }
+//         fprintf(fp, "\n                    ]");
+//     }
 
-    fprintf(fp, "\n                }");
-}
+//     fprintf(fp, "\n                }");
+// }
 
-void serializeBlockLinearizationStats(FILE* fp, const Luau::CodeGen::BlockLinearizationStats& stats)
-{
-    fprintf(fp, "{\n");
+// void serializeBlockLinearizationStats(FILE* fp, const Luau::CodeGen::BlockLinearizationStats& stats)
+// {
+//     fprintf(fp, "{\n");
 
-    WRITE_PAIR("                ", constPropInstructionCount, "%u,\n");
-    WRITE_PAIR("                ", timeSeconds, "%f\n");
+//     WRITE_PAIR("                ", constPropInstructionCount, "%u,\n");
+//     WRITE_PAIR("                ", timeSeconds, "%f\n");
 
-    fprintf(fp, "            }");
-}
+//     fprintf(fp, "            }");
+// }
 
-void serializeLoweringStats(FILE* fp, const Luau::CodeGen::LoweringStats& stats)
-{
-    fprintf(fp, "{\n");
+// void serializeLoweringStats(FILE* fp, const Luau::CodeGen::LoweringStats& stats)
+// {
+//     fprintf(fp, "{\n");
 
-    WRITE_PAIR("            ", totalFunctions, "%u,\n");
-    WRITE_PAIR("            ", skippedFunctions, "%u,\n");
-    WRITE_PAIR("            ", spillsToSlot, "%d,\n");
-    WRITE_PAIR("            ", spillsToRestore, "%d,\n");
-    WRITE_PAIR("            ", maxSpillSlotsUsed, "%u,\n");
-    WRITE_PAIR("            ", blocksPreOpt, "%u,\n");
-    WRITE_PAIR("            ", blocksPostOpt, "%u,\n");
-    WRITE_PAIR("            ", maxBlockInstructions, "%u,\n");
-    WRITE_PAIR("            ", regAllocErrors, "%d,\n");
-    WRITE_PAIR("            ", loweringErrors, "%d,\n");
+//     WRITE_PAIR("            ", totalFunctions, "%u,\n");
+//     WRITE_PAIR("            ", skippedFunctions, "%u,\n");
+//     WRITE_PAIR("            ", spillsToSlot, "%d,\n");
+//     WRITE_PAIR("            ", spillsToRestore, "%d,\n");
+//     WRITE_PAIR("            ", maxSpillSlotsUsed, "%u,\n");
+//     WRITE_PAIR("            ", blocksPreOpt, "%u,\n");
+//     WRITE_PAIR("            ", blocksPostOpt, "%u,\n");
+//     WRITE_PAIR("            ", maxBlockInstructions, "%u,\n");
+//     WRITE_PAIR("            ", regAllocErrors, "%d,\n");
+//     WRITE_PAIR("            ", loweringErrors, "%d,\n");
 
-    WRITE_NAME("            ", blockLinearizationStats);
-    serializeBlockLinearizationStats(fp, stats.blockLinearizationStats);
-    fprintf(fp, ",\n");
+//     WRITE_NAME("            ", blockLinearizationStats);
+//     serializeBlockLinearizationStats(fp, stats.blockLinearizationStats);
+//     fprintf(fp, ",\n");
 
-    WRITE_NAME("            ", functions);
-    const size_t functionCount = stats.functions.size();
+//     WRITE_NAME("            ", functions);
+//     const size_t functionCount = stats.functions.size();
 
-    if (functionCount == 0)
-        fprintf(fp, "[]");
-    else
-    {
-        fprintf(fp, "[\n");
-        for (size_t i = 0; i < functionCount; ++i)
-        {
-            serializeFunctionStats(fp, stats.functions[i]);
-            if (i < functionCount - 1)
-                fprintf(fp, ",\n");
-        }
-        fprintf(fp, "\n            ]");
-    }
+//     if (functionCount == 0)
+//         fprintf(fp, "[]");
+//     else
+//     {
+//         fprintf(fp, "[\n");
+//         for (size_t i = 0; i < functionCount; ++i)
+//         {
+//             serializeFunctionStats(fp, stats.functions[i]);
+//             if (i < functionCount - 1)
+//                 fprintf(fp, ",\n");
+//         }
+//         fprintf(fp, "\n            ]");
+//     }
 
-    fprintf(fp, "\n        }");
-}
+//     fprintf(fp, "\n        }");
+// }
 
-void serializeCompileStats(FILE* fp, const CompileStats& stats)
-{
-    fprintf(fp, "{\n");
+// void serializeCompileStats(FILE* fp, const CompileStats& stats)
+// {
+//     fprintf(fp, "{\n");
 
-    WRITE_PAIR("        ", lines, "%zu,\n");
-    WRITE_PAIR("        ", bytecode, "%zu,\n");
-    WRITE_PAIR("        ", bytecodeInstructionCount, "%zu,\n");
-    WRITE_PAIR("        ", codegen, "%zu,\n");
-    WRITE_PAIR("        ", readTime, "%f,\n");
-    WRITE_PAIR("        ", miscTime, "%f,\n");
-    WRITE_PAIR("        ", parseTime, "%f,\n");
-    WRITE_PAIR("        ", compileTime, "%f,\n");
-    WRITE_PAIR("        ", codegenTime, "%f,\n");
+//     WRITE_PAIR("        ", lines, "%zu,\n");
+//     WRITE_PAIR("        ", bytecode, "%zu,\n");
+//     WRITE_PAIR("        ", bytecodeInstructionCount, "%zu,\n");
+//     WRITE_PAIR("        ", codegen, "%zu,\n");
+//     WRITE_PAIR("        ", readTime, "%f,\n");
+//     WRITE_PAIR("        ", miscTime, "%f,\n");
+//     WRITE_PAIR("        ", parseTime, "%f,\n");
+//     WRITE_PAIR("        ", compileTime, "%f,\n");
+//     WRITE_PAIR("        ", codegenTime, "%f,\n");
 
-    WRITE_NAME("        ", lowerStats);
-    serializeLoweringStats(fp, stats.lowerStats);
+//     WRITE_NAME("        ", lowerStats);
+//     serializeLoweringStats(fp, stats.lowerStats);
 
-    fprintf(fp, "\n    }");
-}
+//     fprintf(fp, "\n    }");
+// }
 
 #undef WRITE_NAME
 #undef WRITE_PAIR
@@ -328,7 +328,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
     setLuauFlagsDefault();
 
     CompileFormat compileFormat = CompileFormat::Text;
-    Luau::CodeGen::AssemblyOptions::Target assemblyTarget = Luau::CodeGen::AssemblyOptions::Host;
+    //Luau::CodeGen::AssemblyOptions::Target assemblyTarget = Luau::CodeGen::AssemblyOptions::Host;
     RecordStats recordStats = RecordStats::None;
     std::string statsFile("stats.json");
     bool bytecodeSummary = false;
@@ -364,16 +364,16 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         {
             const char* value = argv[i] + 9;
 
-            if (strcmp(value, "a64") == 0)
-                assemblyTarget = Luau::CodeGen::AssemblyOptions::A64;
-            else if (strcmp(value, "a64_nf") == 0)
-                assemblyTarget = Luau::CodeGen::AssemblyOptions::A64_NoFeatures;
-            else if (strcmp(value, "x64") == 0)
-                assemblyTarget = Luau::CodeGen::AssemblyOptions::X64_SystemV;
-            else if (strcmp(value, "x64_ms") == 0)
-                assemblyTarget = Luau::CodeGen::AssemblyOptions::X64_Windows;
-            else
-                return "Error: unknown target";
+            // if (strcmp(value, "a64") == 0)
+            //     assemblyTarget = Luau::CodeGen::AssemblyOptions::A64;
+            // else if (strcmp(value, "a64_nf") == 0)
+            //     assemblyTarget = Luau::CodeGen::AssemblyOptions::A64_NoFeatures;
+            // else if (strcmp(value, "x64") == 0)
+            //     assemblyTarget = Luau::CodeGen::AssemblyOptions::X64_SystemV;
+            // else if (strcmp(value, "x64_ms") == 0)
+            //     assemblyTarget = Luau::CodeGen::AssemblyOptions::X64_Windows;
+            // else
+            //     return "Error: unknown target";
         }
         else if (strcmp(argv[i], "--timetrace") == 0)
         {
@@ -444,20 +444,20 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
     {
         Luau::BytecodeBuilder bcb;
 
-        Luau::CodeGen::AssemblyOptions options;
-        options.target = assemblyTarget;
-        options.outputBinary = compileFormat == CompileFormat::CodegenNull;
+        // Luau::CodeGen::AssemblyOptions options;
+        // options.target = assemblyTarget;
+        // options.outputBinary = compileFormat == CompileFormat::CodegenNull;
 
-        if (!options.outputBinary)
-        {
-            options.includeAssembly = compileFormat != CompileFormat::CodegenIr;
-            options.includeIr = compileFormat != CompileFormat::CodegenAsm;
-            options.includeIrTypes = compileFormat != CompileFormat::CodegenAsm;
-            options.includeOutlinedCode = compileFormat == CompileFormat::CodegenVerbose;
-        }
+        // if (!options.outputBinary)
+        // {
+        //     options.includeAssembly = compileFormat != CompileFormat::CodegenIr;
+        //     options.includeIr = compileFormat != CompileFormat::CodegenAsm;
+        //     options.includeIrTypes = compileFormat != CompileFormat::CodegenAsm;
+        //     options.includeOutlinedCode = compileFormat == CompileFormat::CodegenVerbose;
+        // }
 
-        options.annotator = annotateInstruction;
-        options.annotatorContext = &bcb;
+        // options.annotator = annotateInstruction;
+        // options.annotatorContext = &bcb;
 
         if (compileFormat == CompileFormat::Text)
         {
@@ -510,10 +510,11 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         case CompileFormat::CodegenAsm:
         case CompileFormat::CodegenIr:
         case CompileFormat::CodegenVerbose:
-            output = getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats);
+            //output = getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats);
+            output = "Codegen not implemented";
             break;
         case CompileFormat::CodegenNull:
-            stats.codegen += getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats).size();
+            //stats.codegen += getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats).size();
             break;
         case CompileFormat::Null:
             break;
