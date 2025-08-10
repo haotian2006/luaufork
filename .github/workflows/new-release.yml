@@ -72,7 +72,7 @@ jobs:
       run: |
         source emsdk/emsdk_env.sh
         emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
-        make -j2 Luau.Web
+        make -j2 Luau.Web LuauCompile.Web
     - uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,4 +80,12 @@ jobs:
         upload_url: ${{ needs.create-release.outputs.upload_url }}
         asset_path: Luau.Web.js
         asset_name: Luau.Web.js
+        asset_content_type: application/octet-stream
+    - uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: LuauCompile.Web.js
+        asset_name: LuauCompile.Web.js
         asset_content_type: application/octet-stream

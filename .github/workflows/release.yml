@@ -52,9 +52,14 @@ jobs:
       run: |
         source emsdk/emsdk_env.sh
         emcmake cmake . -DLUAU_BUILD_WEB=ON -DCMAKE_BUILD_TYPE=Release
-        make -j2 Luau.Web
+        make -j2 Luau.Web LuauCompile.Web
     - uses: actions/upload-artifact@v4
       with:
         name: Luau.Web.js
         path: Luau.Web.js
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      with:
+        name: LuauCompile.Web.js
+        path: LuauCompile.Web.js
         overwrite: true
