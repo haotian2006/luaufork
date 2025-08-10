@@ -283,7 +283,7 @@ if(LUAU_BUILD_WEB)
     target_link_options(Luau.Web PRIVATE -sSINGLE_FILE=1)
 
     
-    target_compile_options(LuauCompile PRIVATE ${LUAU_OPTIONS})
+    target_compile_options(LuauCompile.Web PRIVATE ${LUAU_OPTIONS})
     target_link_libraries(LuauCompile.Web PRIVATE Luau.Compiler Luau.VM)
 
     # declare exported functions to emscripten
