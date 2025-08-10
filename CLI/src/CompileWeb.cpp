@@ -15,7 +15,7 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(DebugLuauTimeTracing)
+// LUAU_FASTFLAG(DebugLuauTimeTracing)
 
 enum class CompileFormat
 {
@@ -324,7 +324,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
 {
     Luau::assertHandler() = assertionHandler;
 
-    setLuauFlagsDefault();
+    //setLuauFlagsDefault();
 
     CompileFormat compileFormat = CompileFormat::Text;
     //Luau::CodeGen::AssemblyOptions::Target assemblyTarget = Luau::CodeGen::AssemblyOptions::Host;
@@ -376,7 +376,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         }
         else if (strcmp(argv[i], "--timetrace") == 0)
         {
-            FFlag::DebugLuauTimeTracing.value = true;
+            //FFlag::DebugLuauTimeTracing.value = true;
         }
         else if (strncmp(argv[i], "--record-stats=", 15) == 0)
         {
@@ -404,7 +404,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         }
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
-            setLuauFlags(argv[i] + 9);
+            //setLuauFlags(argv[i] + 9);
         }
         else if (strncmp(argv[i], "--vector-lib=", 13) == 0)
         {
@@ -431,10 +431,10 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
     if (bytecodeSummary && (recordStats != RecordStats::Function))
         return "'Error: Required '--record-stats=function' for '--bytecode-summary'.";
 
-#if !defined(LUAU_ENABLE_TIME_TRACE)
-    if (FFlag::DebugLuauTimeTracing)
-        return "To run with --timetrace, Luau has to be built with LUAU_ENABLE_TIME_TRACE enabled";
-#endif
+// #if !defined(LUAU_ENABLE_TIME_TRACE)
+//     if (FFlag::DebugLuauTimeTracing)
+//         return "To run with --timetrace, Luau has to be built with LUAU_ENABLE_TIME_TRACE enabled";
+// #endif
 
     CompileStats stats = {};
 
