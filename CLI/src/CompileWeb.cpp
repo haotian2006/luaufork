@@ -503,7 +503,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
             output = bcb.dumpSourceRemarks();
             break;
         case CompileFormat::Binary:
-            output = bcb.getBytecode().data();
+            output.assign(bcb.getBytecode().begin(), bcb.getBytecode().end());
             break;
         case CompileFormat::Codegen:
         case CompileFormat::CodegenAsm:
