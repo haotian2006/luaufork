@@ -85,22 +85,6 @@ jobs:
         Debug/luau-analyze tests/conformance/assert.luau
         Debug/luau-compile tests/conformance/assert.luau
 
-  coverage:
-    runs-on: ubuntu-22.04
-    steps:
-    - uses: actions/checkout@v2
-    - name: install
-      run: |
-        sudo apt install llvm
-    - name: make coverage
-      run: |
-        CXX=clang++ make -j2 config=coverage native=1 coverage
-    - name: upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./coverage.info
-        token: ${{ secrets.CODECOV_TOKEN }}
-
   web:
     runs-on: ubuntu-latest
     steps:

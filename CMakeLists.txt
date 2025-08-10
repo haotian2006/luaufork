@@ -60,6 +60,7 @@ endif()
 
 if(LUAU_BUILD_WEB)
     add_executable(Luau.Web)
+    add_executable(LuauCompile.Web)
 endif()
 
 # Proxy target to make it possible to depend on private VM headers
@@ -280,6 +281,19 @@ if(LUAU_BUILD_WEB)
 
     # the output is a single .js file with an embedded wasm blob
     target_link_options(Luau.Web PRIVATE -sSINGLE_FILE=1)
+
+    
+    target_compile_options(LuauCompile PRIVATE ${LUAU_OPTIONS})
+    target_link_libraries(LuauCompile.Web PRIVATE Luau.Compiler Luau.VM)
+
+    # declare exported functions to emscripten
+    target_link_options(LuauCompile.Web PRIVATE -sEXPORTED_FUNCTIONS=['_exportCompile','_freeCompileResult'] -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap'])
+
+    # add -fexceptions for emscripten to allow exceptions to be caught in C++
+    target_link_options(LuauCompile.Web PRIVATE -fexceptions)
+
+    # the output is a single .js file with an embedded wasm blob
+    target_link_options(LuauCompile.Web PRIVATE -sSINGLE_FILE=1)
 endif()
 
 add_subdirectory(fuzz)

@@ -12,7 +12,7 @@
 
 static void setupState(lua_State* L)
 {
-    luaL_openlibs(L);
+    luaL_openlibs(L); 
 
     luaL_sandbox(L);
 }

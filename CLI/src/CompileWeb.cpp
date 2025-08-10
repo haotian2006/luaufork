@@ -12,11 +12,9 @@
 #include "Luau/Flags.h"
 
 #include <memory>
+#include <string>
 
-#ifdef _WIN32
-#include <io.h>
-#include <fcntl.h>
-#endif
+#include <string.h>
 
 LUAU_FASTFLAG(DebugLuauTimeTracing)
 
@@ -293,141 +291,6 @@ static double recordDeltaTime(double& timer)
     return delta;
 }
 
-static bool compileFile(const char* name, CompileFormat format, Luau::CodeGen::AssemblyOptions::Target assemblyTarget, CompileStats& stats)
-{
-    double currts = Luau::TimeTrace::getClock();
-
-    std::optional<std::string> source = readFile(name);
-    if (!source)
-    {
-        fprintf(stderr, "Error opening %s\n", name);
-        return false;
-    }
-
-    stats.readTime += recordDeltaTime(currts);
-
-    // NOTE: Normally, you should use Luau::compile or luau_compile (see lua_require as an example)
-    // This function is much more complicated because it supports many output human-readable formats through internal interfaces
-
-    try
-    {
-        Luau::BytecodeBuilder bcb;
-
-        Luau::CodeGen::AssemblyOptions options;
-        options.target = assemblyTarget;
-        options.outputBinary = format == CompileFormat::CodegenNull;
-
-        if (!options.outputBinary)
-        {
-            options.includeAssembly = format != CompileFormat::CodegenIr;
-            options.includeIr = format != CompileFormat::CodegenAsm;
-            options.includeIrTypes = format != CompileFormat::CodegenAsm;
-            options.includeOutlinedCode = format == CompileFormat::CodegenVerbose;
-        }
-
-        options.annotator = annotateInstruction;
-        options.annotatorContext = &bcb;
-
-        if (format == CompileFormat::Text)
-        {
-            bcb.setDumpFlags(
-                Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Locals |
-                Luau::BytecodeBuilder::Dump_Remarks | Luau::BytecodeBuilder::Dump_Types
-            );
-            bcb.setDumpSource(*source);
-        }
-        else if (format == CompileFormat::Remarks)
-        {
-            bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Remarks);
-            bcb.setDumpSource(*source);
-        }
-        else if (format == CompileFormat::Codegen || format == CompileFormat::CodegenAsm || format == CompileFormat::CodegenIr ||
-                 format == CompileFormat::CodegenVerbose)
-        {
-            bcb.setDumpFlags(
-                Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Locals |
-                Luau::BytecodeBuilder::Dump_Remarks
-            );
-            bcb.setDumpSource(*source);
-        }
-
-        stats.miscTime += recordDeltaTime(currts);
-
-        Luau::Allocator allocator;
-        Luau::AstNameTable names(allocator);
-        Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator);
-
-        if (!result.errors.empty())
-            throw Luau::ParseErrors(result.errors);
-
-        stats.lines += result.lines;
-        stats.parseTime += recordDeltaTime(currts);
-
-        Luau::compileOrThrow(bcb, result, names, copts());
-        stats.bytecode += bcb.getBytecode().size();
-        stats.bytecodeInstructionCount = bcb.getTotalInstructionCount();
-        stats.compileTime += recordDeltaTime(currts);
-
-        switch (format)
-        {
-        case CompileFormat::Text:
-            printf("%s", bcb.dumpEverything().c_str());
-            break;
-        case CompileFormat::Remarks:
-            printf("%s", bcb.dumpSourceRemarks().c_str());
-            break;
-        case CompileFormat::Binary:
-            fwrite(bcb.getBytecode().data(), 1, bcb.getBytecode().size(), stdout);
-            break;
-        case CompileFormat::Codegen:
-        case CompileFormat::CodegenAsm:
-        case CompileFormat::CodegenIr:
-        case CompileFormat::CodegenVerbose:
-            printf("%s", getCodegenAssembly(name, bcb.getBytecode(), options, &stats.lowerStats).c_str());
-            break;
-        case CompileFormat::CodegenNull:
-            stats.codegen += getCodegenAssembly(name, bcb.getBytecode(), options, &stats.lowerStats).size();
-            stats.codegenTime += recordDeltaTime(currts);
-            break;
-        case CompileFormat::Null:
-            break;
-        }
-
-        return true;
-    }
-    catch (Luau::ParseErrors& e)
-    {
-        for (auto& error : e.getErrors())
-            reportError(name, error);
-        return false;
-    }
-    catch (Luau::CompileError& e)
-    {
-        reportError(name, e);
-        return false;
-    }
-}
-
-static void displayHelp(const char* argv0)
-{
-    printf("Usage: %s [--mode] [options] [file list]\n", argv0);
-    printf("\n");
-    printf("Available modes:\n");
-    printf("   binary, text, remarks, codegen\n");
-    printf("\n");
-    printf("Available options:\n");
-    printf("  -h, --help: Display this usage message.\n");
-    printf("  -O<n>: compile with optimization level n (default 1, n should be between 0 and 2).\n");
-    printf("  -g<n>: compile with debug level n (default 1, n should be between 0 and 2).\n");
-    printf("  --target=<target>: compile code for specific architecture (a64, x64, a64_nf, x64_ms).\n");
-    printf("  --timetrace: record compiler time tracing information into trace.json\n");
-    printf("  --record-stats=<granularity>: granularity of compilation stats (total, file, function).\n");
-    printf("  --bytecode-summary: Compute bytecode operation distribution.\n");
-    printf("  --stats-file=<filename>: file in which compilation stats will be recored (default 'stats.json').\n");
-    printf("  --vector-lib=<name>: name of the library providing vector type operations.\n");
-    printf("  --vector-ctor=<name>: name of the function constructing a vector value.\n");
-    printf("  --vector-type=<name>: name of the vector type.\n");
-}
 
 static int assertionHandler(const char* expr, const char* file, int line, const char* function)
 {
@@ -458,8 +321,7 @@ std::string escapeFilename(const std::string& filename)
 
     return escaped;
 }
-
-int main(int argc, char** argv)
+std::string compileWebMain(int argc, char** argv, const char* sourceCode)
 {
     Luau::assertHandler() = assertionHandler;
 
@@ -475,37 +337,27 @@ int main(int argc, char** argv)
     {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
         {
-            displayHelp(argv[0]);
-            return 0;
+            return "Help requested";
         }
         else if (strncmp(argv[i], "-O", 2) == 0)
         {
             int level = atoi(argv[i] + 2);
             if (level < 0 || level > 2)
-            {
-                fprintf(stderr, "Error: Optimization level must be between 0 and 2 inclusive.\n");
-                return 1;
-            }
+                return "Error: Optimization level must be between 0 and 2 inclusive.";
             globalOptions.optimizationLevel = level;
         }
         else if (strncmp(argv[i], "-g", 2) == 0)
         {
             int level = atoi(argv[i] + 2);
             if (level < 0 || level > 2)
-            {
-                fprintf(stderr, "Error: Debug level must be between 0 and 2 inclusive.\n");
-                return 1;
-            }
+                return "Error: Debug level must be between 0 and 2 inclusive.";
             globalOptions.debugLevel = level;
         }
         else if (strncmp(argv[i], "-t", 2) == 0)
         {
             int level = atoi(argv[i] + 2);
             if (level < 0 || level > 1)
-            {
-                fprintf(stderr, "Error: Type info level must be between 0 and 1 inclusive.\n");
-                return 1;
-            }
+                return "Error: Type info level must be between 0 and 1 inclusive.";
             globalOptions.typeInfoLevel = level;
         }
         else if (strncmp(argv[i], "--target=", 9) == 0)
@@ -521,10 +373,7 @@ int main(int argc, char** argv)
             else if (strcmp(value, "x64_ms") == 0)
                 assemblyTarget = Luau::CodeGen::AssemblyOptions::X64_Windows;
             else
-            {
-                fprintf(stderr, "Error: unknown target\n");
-                return 1;
-            }
+                return "Error: unknown target";
         }
         else if (strcmp(argv[i], "--timetrace") == 0)
         {
@@ -541,10 +390,7 @@ int main(int argc, char** argv)
             else if (strcmp(value, "function") == 0)
                 recordStats = RecordStats::Function;
             else
-            {
-                fprintf(stderr, "Error: unknown 'granularity' for '--record-stats'.\n");
-                return 1;
-            }
+                return "Error: unknown 'granularity' for '--record-stats'.";
         }
         else if (strncmp(argv[i], "--bytecode-summary", 18) == 0)
         {
@@ -555,10 +401,7 @@ int main(int argc, char** argv)
             statsFile = argv[i] + 13;
 
             if (statsFile.size() == 0)
-            {
-                fprintf(stderr, "Error: filename missing for '--stats-file'.\n\n");
-                return 1;
-            }
+                return "Error: filename missing for '--stats-file'.";
         }
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
@@ -582,117 +425,172 @@ int main(int argc, char** argv)
         }
         else if (argv[i][0] == '-')
         {
-            fprintf(stderr, "Error: Unrecognized option '%s'.\n\n", argv[i]);
-            displayHelp(argv[0]);
-            return 1;
+            return std::string("Error: Unrecognized option '") + argv[i] + "'.";
         }
     }
 
     if (bytecodeSummary && (recordStats != RecordStats::Function))
-    {
-        fprintf(stderr, "'Error: Required '--record-stats=function' for '--bytecode-summary'.\n");
-        return 1;
-    }
+        return "'Error: Required '--record-stats=function' for '--bytecode-summary'.";
 
 #if !defined(LUAU_ENABLE_TIME_TRACE)
     if (FFlag::DebugLuauTimeTracing)
-    {
-        fprintf(stderr, "To run with --timetrace, Luau has to be built with LUAU_ENABLE_TIME_TRACE enabled\n");
-        return 1;
-    }
+        return "To run with --timetrace, Luau has to be built with LUAU_ENABLE_TIME_TRACE enabled";
 #endif
 
-    const std::vector<std::string> files = getSourceFiles(argc, argv);
-
-#ifdef _WIN32
-    if (compileFormat == CompileFormat::Binary)
-        _setmode(_fileno(stdout), _O_BINARY);
-#endif
-
-    const size_t fileCount = files.size();
     CompileStats stats = {};
 
-    std::vector<CompileStats> fileStats;
-    if (recordStats == RecordStats::File || recordStats == RecordStats::Function)
-        fileStats.reserve(fileCount);
-
-    int failed = 0;
-    unsigned functionStats = (recordStats == RecordStats::Function ? Luau::CodeGen::FunctionStats_Enable : 0) |
-                             (bytecodeSummary ? Luau::CodeGen::FunctionStats_BytecodeSummary : 0);
-    for (const std::string& path : files)
+    std::string output;
+    try
     {
-        CompileStats fileStat = {};
-        fileStat.lowerStats.functionStatsFlags = functionStats;
-        failed += !compileFile(path.c_str(), compileFormat, assemblyTarget, fileStat);
-        stats += fileStat;
-        if (recordStats == RecordStats::File || recordStats == RecordStats::Function)
-            fileStats.push_back(fileStat);
+        Luau::BytecodeBuilder bcb;
+
+        Luau::CodeGen::AssemblyOptions options;
+        options.target = assemblyTarget;
+        options.outputBinary = compileFormat == CompileFormat::CodegenNull;
+
+        if (!options.outputBinary)
+        {
+            options.includeAssembly = compileFormat != CompileFormat::CodegenIr;
+            options.includeIr = compileFormat != CompileFormat::CodegenAsm;
+            options.includeIrTypes = compileFormat != CompileFormat::CodegenAsm;
+            options.includeOutlinedCode = compileFormat == CompileFormat::CodegenVerbose;
+        }
+
+        options.annotator = annotateInstruction;
+        options.annotatorContext = &bcb;
+
+        if (compileFormat == CompileFormat::Text)
+        {
+            bcb.setDumpFlags(
+                Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Locals |
+                Luau::BytecodeBuilder::Dump_Remarks | Luau::BytecodeBuilder::Dump_Types
+            );
+            bcb.setDumpSource(sourceCode);
+        }
+        else if (compileFormat == CompileFormat::Remarks)
+        {
+            bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Remarks);
+            bcb.setDumpSource(sourceCode);
+        }
+        else if (compileFormat == CompileFormat::Codegen || compileFormat == CompileFormat::CodegenAsm || compileFormat == CompileFormat::CodegenIr ||
+                 compileFormat == CompileFormat::CodegenVerbose)
+        {
+            bcb.setDumpFlags(
+                Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Locals |
+                Luau::BytecodeBuilder::Dump_Remarks
+            );
+            bcb.setDumpSource(sourceCode);
+        }
+
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        Luau::ParseResult result = Luau::Parser::parse(sourceCode, strlen(sourceCode), names, allocator);
+
+        if (!result.errors.empty())
+            throw Luau::ParseErrors(result.errors);
+
+        stats.lines += result.lines;
+
+        Luau::compileOrThrow(bcb, result, names, copts());
+        stats.bytecode += bcb.getBytecode().size();
+        stats.bytecodeInstructionCount = bcb.getTotalInstructionCount();
+
+        switch (compileFormat)
+        {
+        case CompileFormat::Text:
+            output = bcb.dumpEverything();
+            break;
+        case CompileFormat::Remarks:
+            output = bcb.dumpSourceRemarks();
+            break;
+        case CompileFormat::Binary:
+            output.assign(bcb.getBytecode().begin(), bcb.getBytecode().end());
+            break;
+        case CompileFormat::Codegen:
+        case CompileFormat::CodegenAsm:
+        case CompileFormat::CodegenIr:
+        case CompileFormat::CodegenVerbose:
+            output = getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats);
+            break;
+        case CompileFormat::CodegenNull:
+            stats.codegen += getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats).size();
+            break;
+        case CompileFormat::Null:
+            break;
+        }
+
+        return output;
     }
-
-    if (compileFormat == CompileFormat::Null)
+    catch (Luau::ParseErrors& e)
     {
-        printf(
-            "Compiled %d KLOC into %d KB bytecode (read %.2fs, parse %.2fs, compile %.2fs)\n",
-            int(stats.lines / 1000),
-            int(stats.bytecode / 1024),
-            stats.readTime,
-            stats.parseTime,
-            stats.compileTime
+        std::string err;
+        for (auto& error : e.getErrors())
+        {
+            char buf[256];
+            snprintf(
+                buf,
+                sizeof(buf),
+                "SyntaxError at line %d, column %d: %s\n",
+                error.getLocation().begin.line + 1,
+                error.getLocation().begin.column + 1,
+                error.what()
+            );
+            err += buf;
+        }
+        return err;
+    }
+    catch (Luau::CompileError& e)
+    {
+        char buf[256];
+        snprintf(
+            buf, sizeof(buf), "CompileError at line %d, column %d: %s\n", e.getLocation().begin.line + 1, e.getLocation().begin.column + 1, e.what()
         );
+        return buf;
     }
-    else if (compileFormat == CompileFormat::CodegenNull)
+}
+
+std::vector<std::string> splitArgs(const std::string& input)
+{
+    std::vector<std::string> args;
+    size_t start = 0;
+    size_t end = 0;
+
+    while (end < input.size())
     {
-        printf(
-            "Compiled %d KLOC into %d KB bytecode => %d KB native code (%.2fx) (read %.2fs, parse %.2fs, compile %.2fs, codegen %.2fs)\n",
-            int(stats.lines / 1000),
-            int(stats.bytecode / 1024),
-            int(stats.codegen / 1024),
-            stats.bytecode == 0 ? 0.0 : double(stats.codegen) / double(stats.bytecode),
-            stats.readTime,
-            stats.parseTime,
-            stats.compileTime,
-            stats.codegenTime
-        ); 
+        while (start < input.size() && input[start] == ' ')
+            ++start;
 
-        printf(
-            "Lowering: regalloc failed: %d, lowering failed %d; spills to stack: %d, spills to restore: %d, max spill slot %u\n",
-            stats.lowerStats.regAllocErrors,
-            stats.lowerStats.loweringErrors,
-            stats.lowerStats.spillsToSlot,
-            stats.lowerStats.spillsToRestore,
-            stats.lowerStats.maxSpillSlotsUsed
-        );
+        if (start >= input.size())
+            break;
+
+        end = start;
+        while (end < input.size() && input[end] != ' ')
+            ++end;
+
+        args.push_back(input.substr(start, end - start));
+
+        start = end;
     }
+    return args;
+}
 
-    if (recordStats != RecordStats::None)
+const char* exportCompile(const char* input, const char* sourceCode)
+{
+    std::vector<std::string> args = splitArgs(input);
+
+
+    std::vector<char*> argv;
+    for (auto& s : args)
     {
-        FILE* fp = fopen(statsFile.c_str(), "w");
-
-        if (!fp)
-        {
-            fprintf(stderr, "Unable to open 'stats.json'\n");
-            return 1;
-        }
-
-        if (recordStats == RecordStats::Total)
-        {
-            serializeCompileStats(fp, stats);
-        }
-        else if (recordStats == RecordStats::File || recordStats == RecordStats::Function)
-        {
-            fprintf(fp, "{\n");
-            for (size_t i = 0; i < fileCount; ++i)
-            {
-                std::string escaped(escapeFilename(files[i]));
-                fprintf(fp, "    \"%s\": ", escaped.c_str());
-                serializeCompileStats(fp, fileStats[i]);
-                fprintf(fp, i == (fileCount - 1) ? "\n" : ",\n");
-            }
-            fprintf(fp, "}");
-        }
-
-        fclose(fp);
+        argv.push_back(const_cast<char*>(s.c_str()));
     }
 
-    return failed ? 1 : 0;
+    std::string result = compileWebMain(argv.size(), argv.data(), sourceCode);
+
+    char* cstr = strdup(result.c_str()); 
+    return cstr;
+}
+
+extern "C" void freeCompileResult(const char* ptr) {
+    free((void*)ptr);
 }
