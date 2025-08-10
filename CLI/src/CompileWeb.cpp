@@ -576,14 +576,17 @@ std::vector<std::string> splitArgs(const std::string& input)
 
 extern "C"
 {
-     struct Results {
-        uint8_t* data;
-        size_t size;
-    };
-    Results exportCompile(const char* input, const char* sourceCode)
+    static size_t resultSize = 0;
+    static char* data = nullptr;
+    const uint8_t* exportCompile(const char* input, const char* sourceCode)
     {
-        std::vector<std::string> args = splitArgs(input);
+        if (data){
+            free(data);
+            data = nullptr;
+            resultSize = 0;
+        }
 
+        std::vector<std::string> args = splitArgs(input);
 
         std::vector<char*> argv;
         for (auto& s : args)
@@ -593,15 +596,14 @@ extern "C"
 
         std::string result = compileWebMain(argv.size(), argv.data(), sourceCode);
 
-        size_t size = result.size();
-        uint8_t* buffer = (uint8_t*)malloc(size);
-        memcpy(buffer, result.data(), size);
+        resultSize = result.size();
+        data = (char*)malloc(resultSize);
+        memcpy(data, result.data(), resultSize);
 
-        return { buffer, size };
+        return (const uint8_t*)data;
     }
-}
-
-extern "C" void freeValue(const char* ptr)
-{
-    free((void*)ptr);
+    size_t getSize()
+    {
+        return resultSize;
+    }
 }
