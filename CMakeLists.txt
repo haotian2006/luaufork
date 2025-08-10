@@ -284,7 +284,7 @@ if(LUAU_BUILD_WEB)
 
     
     target_compile_options(LuauCompile.Web PRIVATE ${LUAU_OPTIONS})
-    target_link_libraries(LuauCompile.Web PRIVATE Luau.Compiler Luau.VM)
+    target_link_libraries(LuauCompile.Web PRIVATE Luau.Compiler Luau.VM Luau.Ast Luau.CodeGen)
 
     # declare exported functions to emscripten
     target_link_options(LuauCompile.Web PRIVATE -sEXPORTED_FUNCTIONS=['_exportCompile','_freeCompileResult'] -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap'])
