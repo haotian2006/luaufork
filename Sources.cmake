@@ -607,6 +607,12 @@ if(TARGET Luau.Web)
         CLI/src/Web.cpp)
 endif()
 
+if (TARGET LuauCompile.Web)
+    # Luau.Compile.Web Sources
+    target_sources(LuauCompile.Web PRIVATE
+        CLI/src/CompileWeb.cpp)
+endif()
+
 if(TARGET Luau.Reduce.CLI)
     # Luau.Reduce.CLI Sources
     target_sources(Luau.Reduce.CLI PRIVATE
