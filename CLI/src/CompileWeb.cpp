@@ -141,7 +141,7 @@ struct CompileStats
     double compileTime;
     double codegenTime;
 
-    //Luau::CodeGen::LoweringStats lowerStats;
+    // Luau::CodeGen::LoweringStats lowerStats;
 
     CompileStats& operator+=(const CompileStats& that)
     {
@@ -154,7 +154,7 @@ struct CompileStats
         this->parseTime += that.parseTime;
         this->compileTime += that.compileTime;
         this->codegenTime += that.codegenTime;
-        //this->lowerStats += that.lowerStats;
+        // this->lowerStats += that.lowerStats;
 
         return *this;
     }
@@ -324,10 +324,10 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
 {
     Luau::assertHandler() = assertionHandler;
 
-    //setLuauFlagsDefault();
+    // setLuauFlagsDefault();
 
     CompileFormat compileFormat = CompileFormat::Text;
-    //Luau::CodeGen::AssemblyOptions::Target assemblyTarget = Luau::CodeGen::AssemblyOptions::Host;
+    // Luau::CodeGen::AssemblyOptions::Target assemblyTarget = Luau::CodeGen::AssemblyOptions::Host;
     RecordStats recordStats = RecordStats::None;
     std::string statsFile("stats.json");
     bool bytecodeSummary = false;
@@ -376,7 +376,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         }
         else if (strcmp(argv[i], "--timetrace") == 0)
         {
-            //FFlag::DebugLuauTimeTracing.value = true;
+            // FFlag::DebugLuauTimeTracing.value = true;
         }
         else if (strncmp(argv[i], "--record-stats=", 15) == 0)
         {
@@ -404,7 +404,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         }
         else if (strncmp(argv[i], "--fflags=", 9) == 0)
         {
-            //setLuauFlags(argv[i] + 9);
+            // setLuauFlags(argv[i] + 9);
         }
         else if (strncmp(argv[i], "--vector-lib=", 13) == 0)
         {
@@ -431,10 +431,10 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
     if (bytecodeSummary && (recordStats != RecordStats::Function))
         return "'Error: Required '--record-stats=function' for '--bytecode-summary'.";
 
-// #if !defined(LUAU_ENABLE_TIME_TRACE)
-//     if (FFlag::DebugLuauTimeTracing)
-//         return "To run with --timetrace, Luau has to be built with LUAU_ENABLE_TIME_TRACE enabled";
-// #endif
+    // #if !defined(LUAU_ENABLE_TIME_TRACE)
+    //     if (FFlag::DebugLuauTimeTracing)
+    //         return "To run with --timetrace, Luau has to be built with LUAU_ENABLE_TIME_TRACE enabled";
+    // #endif
 
     CompileStats stats = {};
 
@@ -503,25 +503,22 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
             output = bcb.dumpSourceRemarks();
             break;
         case CompileFormat::Binary:
-            printf("Binary format Ran");
-            fwrite(bcb.getBytecode().data(), 1, bcb.getBytecode().size(), stdout);
-            printf("%zu\n", bcb.getBytecode().size());
             output = bcb.getBytecode().data();
             break;
         case CompileFormat::Codegen:
         case CompileFormat::CodegenAsm:
         case CompileFormat::CodegenIr:
         case CompileFormat::CodegenVerbose:
-            //output = getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats);
+            // output = getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats);
             output = "Codegen not implemented";
             break;
         case CompileFormat::CodegenNull:
-            //stats.codegen += getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats).size();
+            // stats.codegen += getCodegenAssembly("webinput", bcb.getBytecode(), options, &stats.lowerStats).size();
             break;
         case CompileFormat::Null:
             break;
         }
-
+    
         return output;
     }
     catch (Luau::ParseErrors& e)
@@ -577,23 +574,34 @@ std::vector<std::string> splitArgs(const std::string& input)
     return args;
 }
 
-extern "C" const char* exportCompile(const char* input, const char* sourceCode)
+extern "C"
 {
-    std::vector<std::string> args = splitArgs(input);
-
-
-    std::vector<char*> argv;
-    for (auto& s : args)
+     struct Results {
+        uint8_t* data;
+        size_t size;
+    };
+    Results exportCompile(const char* input, const char* sourceCode)
     {
-        argv.push_back(const_cast<char*>(s.c_str()));
+        std::vector<std::string> args = splitArgs(input);
+
+
+        std::vector<char*> argv;
+        for (auto& s : args)
+        {
+            argv.push_back(const_cast<char*>(s.c_str()));
+        }
+
+        std::string result = compileWebMain(argv.size(), argv.data(), sourceCode);
+
+        size_t size = result.size();
+        uint8_t* buffer = (uint8_t*)malloc(size);
+        memcpy(buffer, result.data(), size);
+
+        return { buffer, size };
     }
-
-    std::string result = compileWebMain(argv.size(), argv.data(), sourceCode);
-
-    char* cstr = strdup(result.c_str()); 
-    return cstr;
 }
 
-extern "C" void freeCompileResult(const char* ptr) {
+extern "C" void freeValue(const char* ptr)
+{
     free((void*)ptr);
 }

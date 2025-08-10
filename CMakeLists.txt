@@ -287,7 +287,7 @@ if(LUAU_BUILD_WEB)
     target_link_libraries(LuauCompile.Web PRIVATE Luau.Compiler Luau.VM Luau.Ast)
 
     # declare exported functions to emscripten
-    target_link_options(LuauCompile.Web PRIVATE -sEXPORTED_FUNCTIONS=['_exportCompile','_freeCompileResult'] -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap'])
+    target_link_options(LuauCompile.Web PRIVATE -sEXPORTED_FUNCTIONS=['_exportCompile','_freeValue'] -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAPU32','lengthBytesUTF8','stringToUTF8','UTF8ToString'])
 
     # add -fexceptions for emscripten to allow exceptions to be caught in C++
     target_link_options(LuauCompile.Web PRIVATE -fexceptions)
