@@ -518,7 +518,7 @@ std::string compileWebMain(int argc, char** argv, const char* sourceCode)
         case CompileFormat::Null:
             break;
         }
-    
+
         return output;
     }
     catch (Luau::ParseErrors& e)
@@ -576,11 +576,33 @@ std::vector<std::string> splitArgs(const std::string& input)
 
 extern "C"
 {
+    static char* lastResponse = nullptr;
+    const char* exportCompile(const char* input, const char* sourceCode)
+    {
+        if (lastResponse)
+        {
+            free(lastResponse);
+            lastResponse = nullptr;
+        }
+
+        std::vector<std::string> args = splitArgs(input);
+
+        std::vector<char*> argv;
+        for (auto& s : args)
+        {
+            argv.push_back(const_cast<char*>(s.c_str()));
+        }
+
+        std::string result = compileWebMain(argv.size(), argv.data(), sourceCode);
+        lastResponse = strdup(result.c_str());
+        return lastResponse;
+    }
     static size_t resultSize = 0;
     static char* data = nullptr;
-    const uint8_t* exportCompile(const char* input, const char* sourceCode)
+    const uint8_t* exportCompileRaw(const char* input, const char* sourceCode)
     {
-        if (data){
+        if (data)
+        {
             free(data);
             data = nullptr;
             resultSize = 0;
