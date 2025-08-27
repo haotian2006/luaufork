@@ -35,11 +35,7 @@ LUAU_FASTFLAG(DebugLuauEqSatSimplification)
 LUAU_FASTFLAG(LuauEagerGeneralization4)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauLogTypeFamilies)
-LUAU_FASTFLAG(LuauUpdateGetMetatableTypeSignature)
-LUAU_FASTFLAGVARIABLE(LuauOccursCheckForRefinement)
-LUAU_FASTFLAG(LuauRefineTablesWithReadType)
-LUAU_FASTFLAGVARIABLE(LuauEmptyStringInKeyOf)
-LUAU_FASTFLAGVARIABLE(LuauAvoidExcessiveTypeCopying)
+LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
 
 namespace Luau
 {
@@ -58,7 +54,7 @@ struct InstanceCollector : TypeOnceVisitor
 
 
     InstanceCollector()
-        : TypeOnceVisitor("InstanceCollector")
+        : TypeOnceVisitor("InstanceCollector", FFlag::LuauExplicitSkipBoundTypes)
     {
     }
 
@@ -149,7 +145,7 @@ struct UnscopedGenericFinder : TypeOnceVisitor
     bool foundUnscoped = false;
 
     UnscopedGenericFinder()
-        : TypeOnceVisitor("UnscopedGenericFinder")
+        : TypeOnceVisitor("UnscopedGenericFinder", FFlag::LuauExplicitSkipBoundTypes)
     {
     }
 

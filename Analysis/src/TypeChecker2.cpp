@@ -30,15 +30,17 @@
 
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 
-LUAU_FASTFLAG(LuauSubtypingCheckFunctionGenericCounts)
-LUAU_FASTFLAG(LuauTableLiteralSubtypeCheckFunctionCalls)
 LUAU_FASTFLAGVARIABLE(LuauSuppressErrorsForMultipleNonviableOverloads)
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
 LUAU_FASTFLAG(LuauInferActualIfElseExprType2)
 LUAU_FASTFLAG(LuauNewNonStrictSuppressSoloConstraintSolvingIncomplete)
 LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauResetConditionalContextProperly)
+LUAU_FASTFLAG(LuauNameConstraintRestrictRecursiveTypes)
 
 LUAU_FASTFLAGVARIABLE(LuauIceLess)
+LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
+LUAU_FASTFLAGVARIABLE(LuauAllowMixedTables)
 
 namespace Luau
 {
@@ -161,7 +163,7 @@ struct TypeFunctionFinder : TypeOnceVisitor
     DenseHashSet<TypePackId> mentionedFunctionPacks{nullptr};
 
     TypeFunctionFinder()
-        : TypeOnceVisitor("TypeFunctionFinder")
+        : TypeOnceVisitor("TypeFunctionFinder", FFlag::LuauExplicitSkipBoundTypes)
     {
     }
 
@@ -186,7 +188,7 @@ struct InternalTypeFunctionFinder : TypeOnceVisitor
     DenseHashSet<TypePackId> mentionedFunctionPacks{nullptr};
 
     explicit InternalTypeFunctionFinder(std::vector<TypeId>& declStack)
-        : TypeOnceVisitor("InternalTypeFunctionFinder")
+        : TypeOnceVisitor("InternalTypeFunctionFinder", FFlag::LuauExplicitSkipBoundTypes)
     {
         TypeFunctionFinder f;
         for (TypeId fn : declStack)
@@ -1279,6 +1281,15 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
     if (!module->astScopes.contains(stat))
         return;
 
+    if (FFlag::LuauNameConstraintRestrictRecursiveTypes)
+    {
+        if (const Scope* scope = findInnermostScope(stat->location))
+        {
+            if (scope->isInvalidTypeAliasName(stat->name.value))
+                reportError(RecursiveRestraintViolation{}, stat->location);
+        }
+    }
+
     visitGenerics(stat->generics, stat->genericPacks);
     visit(stat->type);
 }
@@ -1402,11 +1413,8 @@ void TypeChecker2::visit(AstExprConstantBool* expr)
     {
         if (!r.isSubtype)
             reportError(TypeMismatch{inferredType, bestType}, expr->location);
-        if (FFlag::LuauSubtypingCheckFunctionGenericCounts)
-        {
-            for (auto& e : r.errors)
-                e.location = expr->location;
-        }
+        for (auto& e : r.errors)
+            e.location = expr->location;
         reportErrors(r.errors);
     }
 }
@@ -1436,11 +1444,8 @@ void TypeChecker2::visit(AstExprConstantString* expr)
     {
         if (!r.isSubtype)
             reportError(TypeMismatch{inferredType, bestType}, expr->location);
-        if (FFlag::LuauSubtypingCheckFunctionGenericCounts)
-        {
-            for (auto& e : r.errors)
-                e.location = expr->location;
-        }
+        for (auto& e : r.errors)
+            e.location = expr->location;
         reportErrors(r.errors);
     }
 }
@@ -1511,11 +1516,10 @@ void TypeChecker2::visitCall(AstExprCall* call)
             fnTy = follow(*selectedOverloadTy);
 
         if (!isErrorSuppressing(call->location, *selectedOverloadTy))
-            if (FFlag::LuauSubtypingCheckFunctionGenericCounts)
-            {
-                for (auto& e : result.errors)
-                    e.location = call->location;
-            }
+        {
+            for (auto& e : result.errors)
+                e.location = call->location;
+        }
         reportErrors(std::move(result.errors));
         if (result.normalizationTooComplex)
         {
@@ -1542,80 +1546,53 @@ void TypeChecker2::visitCall(AstExprCall* call)
         argExprs.push_back(indexExpr->expr);
     }
 
-    if (FFlag::LuauTableLiteralSubtypeCheckFunctionCalls)
+    // FIXME: Similar to bidirectional inference prior, this does not support
+    // overloaded functions nor generic types (yet).
+    if (auto fty = get<FunctionType>(fnTy); fty && fty->generics.empty() && fty->genericPacks.empty() && call->args.size > 0)
     {
-        // FIXME: Similar to bidirectional inference prior, this does not support
-        // overloaded functions nor generic types (yet).
-        if (auto fty = get<FunctionType>(fnTy); fty && fty->generics.empty() && fty->genericPacks.empty() && call->args.size > 0)
+        size_t selfOffset = call->self ? 1 : 0;
+
+        auto [paramsHead, _] = extendTypePack(module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset);
+
+        for (size_t idx = 0; idx < call->args.size - 1; ++idx)
         {
-            size_t selfOffset = call->self ? 1 : 0;
-
-            auto [paramsHead, _] = extendTypePack(module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset);
-
-            for (size_t idx = 0; idx < call->args.size - 1; ++idx)
+            auto argExpr = call->args.data[idx];
+            auto argExprType = lookupType(argExpr);
+            argExprs.push_back(argExpr);
+            if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
             {
-                auto argExpr = call->args.data[idx];
-                auto argExprType = lookupType(argExpr);
-                argExprs.push_back(argExpr);
-                if (idx + selfOffset >= paramsHead.size() || isErrorSuppressing(argExpr->location, argExprType))
-                {
-                    args.head.push_back(argExprType);
-                    continue;
-                }
-                testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
-                args.head.push_back(paramsHead[idx + selfOffset]);
+                args.head.push_back(argExprType);
+                continue;
             }
+            testLiteralOrAstTypeIsSubtype(argExpr, paramsHead[idx + selfOffset]);
+            args.head.push_back(paramsHead[idx + selfOffset]);
+        }
 
-            auto lastExpr = call->args.data[call->args.size - 1];
-            argExprs.push_back(lastExpr);
+        auto lastExpr = call->args.data[call->args.size - 1];
+        argExprs.push_back(lastExpr);
 
-            if (auto argTail = module->astTypePacks.find(lastExpr))
+        if (auto argTail = module->astTypePacks.find(lastExpr))
+        {
+            auto [lastExprHead, lastExprTail] = flatten(*argTail);
+            args.head.insert(args.head.end(), lastExprHead.begin(), lastExprHead.end());
+            args.tail = lastExprTail;
+        }
+        else if (paramsHead.size() >= call->args.size + selfOffset)
+        {
+            auto lastType = paramsHead[call->args.size - 1 + selfOffset];
+            auto lastExprType = lookupType(lastExpr);
+            if (isErrorSuppressing(lastExpr->location, lastExprType))
             {
-                auto [lastExprHead, lastExprTail] = flatten(*argTail);
-                args.head.insert(args.head.end(), lastExprHead.begin(), lastExprHead.end());
-                args.tail = lastExprTail;
-            }
-            else if (paramsHead.size() >= call->args.size + selfOffset)
-            {
-                auto lastType = paramsHead[call->args.size - 1 + selfOffset];
-                auto lastExprType = lookupType(lastExpr);
-                if (isErrorSuppressing(lastExpr->location, lastExprType))
-                {
-                    args.head.push_back(lastExprType);
-                }
-                else
-                {
-                    testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
-                    args.head.push_back(lastType);
-                }
+                args.head.push_back(lastExprType);
             }
             else
-                args.tail = builtinTypes->anyTypePack;
-        }
-        else
-        {
-            for (size_t i = 0; i < call->args.size; ++i)
             {
-                AstExpr* arg = call->args.data[i];
-                argExprs.push_back(arg);
-                TypeId* argTy = module->astTypes.find(arg);
-                if (argTy)
-                    args.head.push_back(*argTy);
-                else if (i == call->args.size - 1)
-                {
-                    if (auto argTail = module->astTypePacks.find(arg))
-                    {
-                        auto [head, tail] = flatten(*argTail);
-                        args.head.insert(args.head.end(), head.begin(), head.end());
-                        args.tail = tail;
-                    }
-                    else
-                        args.tail = builtinTypes->anyTypePack;
-                }
-                else
-                    args.head.push_back(builtinTypes->anyType);
+                testLiteralOrAstTypeIsSubtype(lastExpr, lastType);
+                args.head.push_back(lastType);
             }
         }
+        else
+            args.tail = builtinTypes->anyTypePack;
     }
     else
     {
@@ -1757,7 +1734,11 @@ void TypeChecker2::visitCall(AstExprCall* call)
 
 void TypeChecker2::visit(AstExprCall* call)
 {
+    std::optional<InConditionalContext> flipper;
+    if (FFlag::LuauResetConditionalContextProperly)
+        flipper.emplace(&typeContext, TypeContext::Default);
     visit(call->func, ValueContext::RValue);
+    flipper.reset();
 
     for (AstExpr* arg : call->args)
         visit(arg, ValueContext::RValue);
@@ -1917,6 +1898,10 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
 
 void TypeChecker2::visit(AstExprFunction* fn)
 {
+    std::optional<InConditionalContext> flipper;
+    if (FFlag::LuauResetConditionalContextProperly)
+        flipper.emplace(&typeContext, TypeContext::Default);
+
     auto StackPusher = pushStack(fn);
 
     visitGenerics(fn->generics, fn->genericPacks);
@@ -2070,6 +2055,10 @@ void TypeChecker2::visit(AstExprFunction* fn)
 
 void TypeChecker2::visit(AstExprTable* expr)
 {
+    std::optional<InConditionalContext> inContext;
+    if (FFlag::LuauResetConditionalContextProperly)
+        inContext.emplace(&typeContext, TypeContext::Default);
+
     for (const AstExprTable::Item& item : expr->items)
     {
         if (item.key)
@@ -2080,6 +2069,10 @@ void TypeChecker2::visit(AstExprTable* expr)
 
 void TypeChecker2::visit(AstExprUnary* expr)
 {
+    std::optional<InConditionalContext> inContext;
+    if (FFlag::LuauResetConditionalContextProperly && expr->op != AstExprUnary::Op::Not)
+        inContext.emplace(&typeContext, TypeContext::Default);
+
     visit(expr->expr, ValueContext::RValue);
 
     TypeId operandType = lookupType(expr->expr);
@@ -2171,6 +2164,13 @@ void TypeChecker2::visit(AstExprUnary* expr)
 
 TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
 {
+    std::optional<InConditionalContext> inContext;
+    if (FFlag::LuauResetConditionalContextProperly)
+    {
+        if (expr->op != AstExprBinary::And && expr->op != AstExprBinary::Or && expr->op != AstExprBinary::CompareEq && expr->op != AstExprBinary::CompareNe)
+            inContext.emplace(&typeContext, TypeContext::Default);
+    }
+
     visit(expr->left, ValueContext::RValue);
     visit(expr->right, ValueContext::RValue);
 
@@ -2550,7 +2550,10 @@ void TypeChecker2::visit(AstExprTypeAssertion* expr)
 
 void TypeChecker2::visit(AstExprIfElse* expr)
 {
-    // TODO!
+    std::optional<InConditionalContext> inContext;
+    if (FFlag::LuauResetConditionalContextProperly)
+        inContext.emplace(&typeContext, TypeContext::Default);
+
     visit(expr->condition, ValueContext::RValue);
     visit(expr->trueExpr, ValueContext::RValue);
     visit(expr->falseExpr, ValueContext::RValue);
@@ -2558,6 +2561,10 @@ void TypeChecker2::visit(AstExprIfElse* expr)
 
 void TypeChecker2::visit(AstExprInterpString* interpString)
 {
+    std::optional<InConditionalContext> inContext;
+    if (FFlag::LuauResetConditionalContextProperly)
+        inContext.emplace(&typeContext, TypeContext::Default);
+
     for (AstExpr* expr : interpString->expressions)
         visit(expr, ValueContext::RValue);
 }
@@ -3124,8 +3131,17 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
     if (expectedTableType->indexer)
     {
         NotNull<Scope> scope{findInnermostScope(expr->location)};
-        auto result = subtyping->isSubtype(expectedTableType->indexer->indexType, builtinTypes->numberType, scope);
-        isArrayLike = result.isSubtype;
+
+        if (FFlag::LuauAllowMixedTables)
+        {
+            auto result = subtyping->isSubtype(/* subTy */ builtinTypes->numberType, /* superTy */ expectedTableType->indexer->indexType, scope);
+            isArrayLike = result.isSubtype || isErrorSuppressing(expr->location, expectedTableType->indexer->indexType);
+        }
+        else
+        {
+            auto result = subtyping->isSubtype(/* subTy */ expectedTableType->indexer->indexType, /* superTy */ builtinTypes->numberType, scope);
+            isArrayLike = result.isSubtype;
+        }
     }
 
     bool isSubtype = true;
@@ -3206,11 +3222,10 @@ bool TypeChecker2::testIsSubtype(TypeId subTy, TypeId superTy, Location location
     SubtypingResult r = subtyping->isSubtype(subTy, superTy, scope);
 
     if (!isErrorSuppressing(location, subTy))
-        if (FFlag::LuauSubtypingCheckFunctionGenericCounts)
-        {
-            for (auto& e : r.errors)
-                e.location = location;
-        }
+    {
+        for (auto& e : r.errors)
+            e.location = location;
+    }
     reportErrors(std::move(r.errors));
     if (r.normalizationTooComplex)
         reportError(NormalizationTooComplex{}, location);
@@ -3227,11 +3242,10 @@ bool TypeChecker2::testIsSubtype(TypePackId subTy, TypePackId superTy, Location 
     SubtypingResult r = subtyping->isSubtype(subTy, superTy, scope);
 
     if (!isErrorSuppressing(location, subTy))
-        if (FFlag::LuauSubtypingCheckFunctionGenericCounts)
-        {
-            for (auto& e : r.errors)
-                e.location = location;
-        }
+    {
+        for (auto& e : r.errors)
+            e.location = location;
+    }
     reportErrors(std::move(r.errors));
     if (r.normalizationTooComplex)
         reportError(NormalizationTooComplex{}, location);

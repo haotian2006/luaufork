@@ -10,9 +10,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauRefineTablesWithReadType)
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
-LUAU_FASTFLAG(LuauPushFunctionTypesInFunctionStatement)
 
 TEST_SUITE_BEGIN("IntersectionTypes");
 
@@ -335,8 +333,6 @@ TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed")
 
 TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed_indirect")
 {
-    ScopedFastFlag sff{FFlag::LuauPushFunctionTypesInFunctionStatement, true};
-
     CheckResult result = check(R"(
         type X = { x: (number) -> number }
         type Y = { y: (string) -> string }
@@ -1468,10 +1464,7 @@ TEST_CASE_FIXTURE(Fixture, "cli_80596_simplify_more_realistic_intersections")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "narrow_intersection_nevers")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauSolverV2, true},
-        {FFlag::LuauRefineTablesWithReadType, true},
-    };
+    ScopedFastFlag sffs{FFlag::LuauSolverV2, true};
 
     loadDefinition(R"(
         declare class Player

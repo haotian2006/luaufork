@@ -31,7 +31,6 @@ LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 LUAU_FASTFLAG(LuauFragmentRequiresCanBeResolvedToAModule)
 LUAU_FASTFLAG(LuauFragmentAutocompleteTracksRValueRefinements)
 LUAU_FASTFLAG(LuauPopulateSelfTypesInFragment)
-LUAU_FASTFLAG(LuauPushFunctionTypesInFunctionStatement)
 LUAU_FASTFLAG(LuauParseIncompleteInterpStringsWithLocation)
 LUAU_FASTFLAG(LuauForInProvidesRecommendations)
 
@@ -156,7 +155,7 @@ struct FragmentAutocompleteFixtureImpl : BaseType
     )
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, true};
-        this->getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::New);
+        this->getFrontend().setLuauSolverMode(SolverMode::New);
         this->check(document, getOptions());
 
         FragmentAutocompleteStatusResult result = autocompleteFragment(updated, cursorPos, fragmentEndPosition);
@@ -173,7 +172,7 @@ struct FragmentAutocompleteFixtureImpl : BaseType
     )
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, false};
-        this->getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::Old);
+        this->getFrontend().setLuauSolverMode(SolverMode::Old);
         this->check(document, getOptions());
 
         FragmentAutocompleteStatusResult result = autocompleteFragment(updated, cursorPos, fragmentEndPosition);
@@ -190,7 +189,7 @@ struct FragmentAutocompleteFixtureImpl : BaseType
     )
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, true};
-        this->getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::New);
+        this->getFrontend().setLuauSolverMode(SolverMode::New);
         this->check(document, getOptions());
 
         FragmentAutocompleteStatusResult result = autocompleteFragment(updated, cursorPos, fragmentEndPosition);
@@ -198,7 +197,7 @@ struct FragmentAutocompleteFixtureImpl : BaseType
         assertions(result);
 
         ScopedFastFlag _{FFlag::LuauSolverV2, false};
-        this->getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::Old);
+        this->getFrontend().setLuauSolverMode(SolverMode::Old);
         this->check(document, getOptions());
 
         result = autocompleteFragment(updated, cursorPos, fragmentEndPosition);
@@ -1346,7 +1345,7 @@ t
 
     FrontendOptions opts;
     opts.forAutocomplete = true;
-    getFrontend().setLuauSolverSelectionFromWorkspace(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
+    getFrontend().setLuauSolverMode(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
     getFrontend().check("game/A", opts);
     CHECK_NE(getFrontend().moduleResolverForAutocomplete.getModule("game/A"), nullptr);
     CHECK_EQ(getFrontend().moduleResolver.getModule("game/A"), nullptr);
@@ -1428,7 +1427,7 @@ TEST_SUITE_BEGIN("MixedModeTests");
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "mixed_mode_basic_example_append")
 {
     ScopedFastFlag sff{FFlag::LuauSolverV2, false};
-    getFrontend().setLuauSolverSelectionFromWorkspace(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
+    getFrontend().setLuauSolverMode(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
     auto res = checkOldSolver(
         R"(
 local x = 4
@@ -1455,7 +1454,7 @@ local z = x + y
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "mixed_mode_basic_example_inlined")
 {
     ScopedFastFlag sff{FFlag::LuauSolverV2, false};
-    getFrontend().setLuauSolverSelectionFromWorkspace(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
+    getFrontend().setLuauSolverMode(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
     auto res = checkOldSolver(
         R"(
 local x = 4
@@ -1480,7 +1479,7 @@ local y = 5
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "mixed_mode_can_autocomplete_simple_property_access")
 {
     ScopedFastFlag sff{FFlag::LuauSolverV2, false};
-    getFrontend().setLuauSolverSelectionFromWorkspace(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
+    getFrontend().setLuauSolverMode(FFlag::LuauSolverV2 ? SolverMode::New : SolverMode::Old);
     auto res = checkOldSolver(
         R"(
 local tbl = { abc = 1234}
@@ -1595,14 +1594,14 @@ return module)";
 
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, false};
-        getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::Old);
+        getFrontend().setLuauSolverMode(SolverMode::Old);
         checkAndExamine(source, "module", "{|  |}");
         fragmentACAndCheck(updated1, Position{1, 17}, "module", "{|  |}", "{| a: (%error-id%: unknown) -> () |}");
         fragmentACAndCheck(updated2, Position{1, 18}, "module", "{|  |}", "{| ab: (%error-id%: unknown) -> () |}");
     }
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, true};
-        getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::New);
+        getFrontend().setLuauSolverMode(SolverMode::New);
         checkAndExamine(source, "module", "{  }");
         // [TODO] CLI-140762 Fragment autocomplete still doesn't return correct result when LuauSolverV2 is on
         return;
@@ -2969,7 +2968,7 @@ return module)";
 
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, false};
-        getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::Old);
+        getFrontend().setLuauSolverMode(SolverMode::Old);
         checkAndExamine(source, "module", "{|  |}");
         // [TODO] CLI-140762 we shouldn't mutate stale module in autocompleteFragment
         // early return since the following checking will fail, which it shouldn't!
@@ -2979,7 +2978,7 @@ return module)";
 
     {
         ScopedFastFlag sff{FFlag::LuauSolverV2, true};
-        getFrontend().setLuauSolverSelectionFromWorkspace(SolverMode::New);
+        getFrontend().setLuauSolverMode(SolverMode::New);
         checkAndExamine(source, "module", "{  }");
         // [TODO] CLI-140762 we shouldn't mutate stale module in autocompleteFragment
         // early return since the following checking will fail, which it shouldn't!
@@ -3948,8 +3947,6 @@ require(script.A).
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "self_types_provide_rich_autocomplete")
 {
-    ScopedFastFlag sff{FFlag::LuauPushFunctionTypesInFunctionStatement, true};
-
     const std::string source = R"(
 type Service = {
     Start: (self: Service) -> (),
@@ -3990,7 +3987,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "self_with_fancy_metatable_setting_new_solver")
 {
-    ScopedFastFlag sff{FFlag::LuauPushFunctionTypesInFunctionStatement, true};
     const std::string source = R"(
         type IAccount = {
             __index: IAccount,
@@ -4060,8 +4056,6 @@ TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "self_with_fancy_metatabl
 
 TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "self_with_colon_good_recommendations")
 {
-    ScopedFastFlag sff{FFlag::LuauPushFunctionTypesInFunctionStatement, true};
-
     const std::string source = R"(
 type Service = {
     Start: (self: Service) -> (),

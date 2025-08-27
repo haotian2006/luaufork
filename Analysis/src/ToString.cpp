@@ -22,6 +22,7 @@ LUAU_FASTFLAGVARIABLE(LuauEnableDenseTableAlias)
 
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAGVARIABLE(LuauSolverAgnosticStringification)
+LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
 
 /*
  * Enables increasing levels of verbosity for Luau type names when stringifying.
@@ -51,7 +52,7 @@ namespace
 struct FindCyclicTypes final : TypeVisitor
 {
     FindCyclicTypes()
-        : TypeVisitor("FindCyclicTypes")
+        : TypeVisitor("FindCyclicTypes", FFlag::LuauExplicitSkipBoundTypes)
     {
     }
 
@@ -2012,7 +2013,10 @@ std::string toString(const Constraint& constraint, ToStringOptions& opts)
         }
         else if constexpr (std::is_same_v<T, HasPropConstraint>)
         {
-            return tos(c.resultType) + " ~ hasProp " + tos(c.subjectType) + ", \"" + c.prop + "\" ctx=" + std::to_string(int(c.context));
+            std::string s = tos(c.resultType) + " ~ hasProp " + tos(c.subjectType) + ", \"" + c.prop + "\" ctx=" + std::to_string(int(c.context));
+            if (c.inConditional)
+                s += " (inConditional)";
+            return s;
         }
         else if constexpr (std::is_same_v<T, HasIndexerConstraint>)
         {

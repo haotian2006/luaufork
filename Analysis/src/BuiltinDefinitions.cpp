@@ -34,9 +34,8 @@
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAGVARIABLE(LuauTableCloneClonesType3)
-LUAU_FASTFLAGVARIABLE(LuauUpdateSetMetatableTypeSignature)
-LUAU_FASTFLAGVARIABLE(LuauUpdateGetMetatableTypeSignature)
 LUAU_FASTFLAG(LuauUseWorkspacePropToChooseSolver)
+LUAU_FASTFLAG(LuauEmplaceNotPushBack)
 
 namespace Luau
 {
@@ -193,18 +192,29 @@ TypeId makeFunction(
     FunctionType ftv{generics, genericPacks, paramPack, retPack, {}, selfType.has_value()};
 
     if (selfType)
-        ftv.argNames.push_back(Luau::FunctionArgument{"self", {}});
+    {
+        if (FFlag::LuauEmplaceNotPushBack)
+            ftv.argNames.emplace_back(Luau::FunctionArgument{"self", {}});
+        else
+            ftv.argNames.push_back(Luau::FunctionArgument{"self", {}});
+    }
 
     if (paramNames.size() != 0)
     {
         for (auto&& p : paramNames)
-            ftv.argNames.push_back(Luau::FunctionArgument{std::move(p), {}});
+            if (FFlag::LuauEmplaceNotPushBack)
+                ftv.argNames.emplace_back(Luau::FunctionArgument{p, Location{}});
+            else
+                ftv.argNames.push_back(Luau::FunctionArgument{std::move(p), {}});
     }
     else if (selfType)
     {
         // If argument names were not provided, but we have already added a name for 'self' argument, we have to fill remaining slots as well
         for (size_t i = 0; i < paramTypes.size(); i++)
-            ftv.argNames.push_back(std::nullopt);
+            if (FFlag::LuauEmplaceNotPushBack)
+                ftv.argNames.emplace_back(std::nullopt);
+            else
+                ftv.argNames.push_back(std::nullopt);
     }
 
     ftv.isCheckedFunction = checked;
@@ -384,7 +394,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     TypeId genericT = arena.addType(GenericType{globalScope, "T"});
 
-    if ((frontend.getLuauSolverMode() == SolverMode::New) && FFlag::LuauUpdateGetMetatableTypeSignature)
+    if (frontend.getLuauSolverMode() == SolverMode::New)
     {
         // getmetatable : <T>(T) -> getmetatable<T>
         TypeId getmtReturn = arena.addType(TypeFunctionInstanceType{builtinTypeFunctions().getmetatableFunc, {genericT}});
@@ -398,32 +408,14 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     if (frontend.getLuauSolverMode() == SolverMode::New)
     {
-        TypeId tMetaMT = arena.addType(MetatableType{genericT, genericMT});
-
-        if (FFlag::LuauUpdateSetMetatableTypeSignature)
-        {
-            // setmetatable<T: {}, MT>(T, MT) -> setmetatable<T, MT>
-            TypeId setmtReturn = arena.addType(TypeFunctionInstanceType{builtinTypeFunctions().setmetatableFunc, {genericT, genericMT}});
-            addGlobalBinding(
-                globals, "setmetatable", makeFunction(arena, std::nullopt, {genericT, genericMT}, {}, {genericT, genericMT}, {setmtReturn}), "@luau"
-            );
-        }
-        else
-        {
-            // clang-format off
-            // setmetatable<T: {}, MT>(T, MT) -> { @metatable MT, T }
-            addGlobalBinding(globals, "setmetatable",
-                arena.addType(
-                    FunctionType{
-                        {genericT, genericMT},
-                        {},
-                        arena.addTypePack(TypePack{{genericT, genericMT}}),
-                        arena.addTypePack(TypePack{{tMetaMT}})
-                    }
-                ), "@luau"
-            );
-            // clang-format on
-        }
+        // setmetatable<T: {}, MT>(T, MT) -> setmetatable<T, MT>
+        TypeId setmtReturn = arena.addType(TypeFunctionInstanceType{builtinTypeFunctions().setmetatableFunc, {genericT, genericMT}});
+        addGlobalBinding(
+            globals,
+            "setmetatable",
+            makeFunction(arena, std::nullopt, {genericT, genericMT}, {}, {genericT, genericMT}, {setmtReturn}),
+            "@luau"
+        );
     }
     else
     {

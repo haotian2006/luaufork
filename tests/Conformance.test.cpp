@@ -36,10 +36,13 @@ void luau_callhook(lua_State* L, lua_Hook hook, void* userdata);
 
 LUAU_FASTFLAG(LuauHeapDumpStringSizeOverhead)
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
+LUAU_FASTFLAG(LuauCodeGenDirectBtest)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_DYNAMIC_FASTFLAG(LuauErrorYield)
 LUAU_DYNAMIC_FASTFLAG(LuauSafeStackCheck)
-LUAU_FASTFLAG(LuauCompileCli162537)
+LUAU_FASTFLAG(LuauVectorLerp)
+LUAU_FASTFLAG(LuauCompileVectorLerp)
+LUAU_FASTFLAG(LuauTypeCheckerVectorLerp)
 
 static lua_CompileOptions defaultOptions()
 {
@@ -47,9 +50,6 @@ static lua_CompileOptions defaultOptions()
     copts.optimizationLevel = optimizationLevel;
     copts.debugLevel = 1;
     copts.typeInfoLevel = 1;
-
-    copts.vectorCtor = "vector";
-    copts.vectorType = "vector";
 
     return copts;
 }
@@ -106,21 +106,6 @@ static int lua_loadstring(lua_State* L)
     lua_pushnil(L);
     lua_insert(L, -2); // put before error message
     return 2;          // return nil plus error message
-}
-
-static int lua_vector(lua_State* L)
-{
-    double x = luaL_checknumber(L, 1);
-    double y = luaL_checknumber(L, 2);
-    double z = luaL_checknumber(L, 3);
-
-#if LUA_VECTOR_SIZE == 4
-    double w = luaL_optnumber(L, 4, 0.0);
-    lua_pushvector(L, float(x), float(y), float(z), float(w));
-#else
-    lua_pushvector(L, float(x), float(y), float(z));
-#endif
-    return 1;
 }
 
 static int lua_vector_dot(lua_State* L)
@@ -280,7 +265,6 @@ static StateRef runConformance(
 
     // Lua conformance tests treat _G synonymously with getfenv(); for now cater to them
     lua_pushvalue(L, LUA_GLOBALSINDEX);
-    lua_pushvalue(L, LUA_GLOBALSINDEX);
     lua_setfield(L, -1, "_G");
 
     std::string chunkname = "=" + std::string(name);
@@ -314,6 +298,7 @@ static StateRef runConformance(
     {
         REQUIRE(lua_isstring(L, -1));
         CHECK(std::string(lua_tostring(L, -1)) == "OK");
+        lua_pop(L, 1);
     }
     else
     {
@@ -347,9 +332,6 @@ static void* limitedRealloc(void* ud, void* ptr, size_t osize, size_t nsize)
 
 void setupVectorHelpers(lua_State* L)
 {
-    lua_pushcfunction(L, lua_vector, "vector");
-    lua_setglobal(L, "vector");
-
 #if LUA_VECTOR_SIZE == 4
     lua_pushvector(L, 0.0f, 0.0f, 0.0f, 0.0f);
 #else
@@ -1152,6 +1134,8 @@ TEST_CASE("Vector")
 
 TEST_CASE("VectorLibrary")
 {
+    ScopedFastFlag _[]{{FFlag::LuauCompileVectorLerp, true}, {FFlag::LuauTypeCheckerVectorLerp, true}, {FFlag::LuauVectorLerp, true}};
+
     lua_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
@@ -1816,6 +1800,23 @@ TEST_CASE("ApiIter")
     lua_pop(L, 1);
 }
 
+static int cpcallTest(lua_State* L)
+{
+    bool shouldFail = *(bool*)(lua_tolightuserdata(L, 1));
+
+    if (shouldFail)
+    {
+        luaL_error(L, "Failed");
+    }
+    else
+    {
+        lua_pushinteger(L, 123);
+        lua_setglobal(L, "cpcallvalue");
+    }
+
+    return 0;
+}
+
 TEST_CASE("ApiCalls")
 {
     StateRef globalState = runConformance("apicalls.luau", nullptr, nullptr, lua_newstate(limitedRealloc, nullptr));
@@ -1841,6 +1842,49 @@ TEST_CASE("ApiCalls")
         CHECK(lua_isnumber(L, -1));
         CHECK(lua_tonumber(L, -1) == 42);
         lua_pop(L, 1);
+    }
+
+    // lua_cpcall success
+    {
+        bool shouldFail = false;
+        CHECK(lua_cpcall(L, cpcallTest, &shouldFail) == LUA_OK);
+        CHECK(lua_status(L) == LUA_OK);
+
+        lua_getglobal(L, "cpcallvalue");
+        CHECK(luaL_checkinteger(L, -1) == 123);
+        lua_pop(L, 1);
+    }
+
+    // lua_cpcall failure
+    {
+        bool shouldFail = true;
+        CHECK(lua_cpcall(L, cpcallTest, &shouldFail) == LUA_ERRRUN);
+        REQUIRE(lua_isstring(L, -1));
+        CHECK(std::string(lua_tostring(L, -1)) == "Failed");
+        lua_pop(L, 1);
+
+        CHECK(lua_status(L) == LUA_OK);
+    }
+
+    // lua_cpcall early failure
+    {
+        bool shouldFail = false;
+
+        CHECK(lua_gettop(L) == 0);
+
+        luaL_checkstack(L, LUAI_MAXCSTACK - 1, "must succeed");
+
+        for (int i = 0; i < LUAI_MAXCSTACK - 1; i++)
+            lua_pushnumber(L, 1.0);
+
+        CHECK(lua_cpcall(L, cpcallTest, &shouldFail) == LUA_ERRRUN);
+        REQUIRE(lua_isstring(L, -1));
+        CHECK(std::string(lua_tostring(L, -1)) == "stack limit");
+        lua_pop(L, 1);
+
+        CHECK(lua_status(L) == LUA_OK);
+
+        lua_pop(L, LUAI_MAXCSTACK - 1);
     }
 
     // lua_equal with a sleeping thread wake up
@@ -3074,18 +3118,48 @@ TEST_CASE("SafeEnv")
 
 TEST_CASE("Native")
 {
+    ScopedFastFlag luauCodeGenDirectBtest{FFlag::LuauCodeGenDirectBtest, true};
+
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
     if (!codegen || !luau_codegen_supported())
         return;
 
+    lua_CompileOptions copts = defaultOptions();
+
     SUBCASE("Checked")
     {
         FFlag::DebugLuauAbortingChecks.value = true;
+
+        SUBCASE("O0")
+        {
+            copts.optimizationLevel = 0;
+        }
+        SUBCASE("O1")
+        {
+            copts.optimizationLevel = 1;
+        }
+        SUBCASE("O2")
+        {
+            copts.optimizationLevel = 2;
+        }
     }
 
     SUBCASE("Regular")
     {
         FFlag::DebugLuauAbortingChecks.value = false;
+
+        SUBCASE("O0")
+        {
+            copts.optimizationLevel = 0;
+        }
+        SUBCASE("O1")
+        {
+            copts.optimizationLevel = 1;
+        }
+        SUBCASE("O2")
+        {
+            copts.optimizationLevel = 2;
+        }
     }
 
     runConformance(
@@ -3093,7 +3167,10 @@ TEST_CASE("Native")
         [](lua_State* L)
         {
             setupNativeHelpers(L);
-        }
+        },
+        nullptr,
+        nullptr,
+        &copts
     );
 }
 
@@ -3329,8 +3406,6 @@ TEST_CASE("HugeFunctionLoadFailure")
 
 TEST_CASE("HugeConstantTable")
 {
-    ScopedFastFlag luauCompileCli162537{FFlag::LuauCompileCli162537, true};
-
     std::string source = "function foo(...)\n";
 
     source += "    local args = ...\n";
