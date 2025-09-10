@@ -13,6 +13,9 @@ LUAU_FASTFLAG(LuauSolverV2)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuauEagerGeneralization4)
+LUAU_FASTFLAG(LuauSolverAgnosticStringification)
+LUAU_FASTFLAG(LuauRemoveGenericErrorForParams)
+LUAU_FASTFLAG(LuauAddErrorCaseForIncompatibleTypePacks)
 
 TEST_SUITE_BEGIN("TypePackTests");
 
@@ -88,6 +91,9 @@ TEST_CASE_FIXTURE(Fixture, "last_element_of_return_statement_can_itself_be_a_pac
 
 TEST_CASE_FIXTURE(Fixture, "higher_order_function")
 {
+    ScopedFastFlag _[] = {
+        {FFlag::LuauEagerGeneralization4, true},
+    };
     CheckResult result = check(R"(
         function apply(f, g, x)
             return f(g(x))
@@ -96,7 +102,7 @@ TEST_CASE_FIXTURE(Fixture, "higher_order_function")
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauEagerGeneralization4)
+    if (FFlag::LuauSolverV2)
         CHECK_EQ("<a, b..., c...>((c...) -> (b...), (a) -> (c...), a) -> (b...)", toString(requireType("apply")));
     else
         CHECK_EQ("<a, b..., c...>((b...) -> (c...), (a) -> (b...), a) -> (c...)", toString(requireType("apply")));
@@ -292,6 +298,8 @@ end
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_type_packs")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
+
     CheckResult result = check(R"(
 type Packed<T...> = (T...) -> T...
 local a: Packed<>
@@ -321,18 +329,13 @@ local c: Packed<string, number, boolean>
     tf = lookupType("Packed");
     REQUIRE(tf);
     CHECK_EQ(toString(*tf), "Packed<T, U...>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(*tf, {true}), "{ f: (T, U...) -> (T, U...) }");
-    else
-        CHECK_EQ(toString(*tf, {true}), "{| f: (T, U...) -> (T, U...) |}");
+    CHECK_EQ(toString(*tf, {true}), "{ f: (T, U...) -> (T, U...) }");
 
     auto ttvA = get<TableType>(requireType("a"));
     REQUIRE(ttvA);
     CHECK_EQ(toString(requireType("a")), "Packed<number>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(requireType("a"), {true}), "{ f: (number) -> number }");
-    else
-        CHECK_EQ(toString(requireType("a"), {true}), "{| f: (number) -> number |}");
+    CHECK_EQ(toString(requireType("a"), {true}), "{ f: (number) -> number }");
+
     REQUIRE(ttvA->instantiatedTypeParams.size() == 1);
     REQUIRE(ttvA->instantiatedTypePackParams.size() == 1);
     CHECK_EQ(toString(ttvA->instantiatedTypeParams[0], {true}), "number");
@@ -341,10 +344,8 @@ local c: Packed<string, number, boolean>
     auto ttvB = get<TableType>(requireType("b"));
     REQUIRE(ttvB);
     CHECK_EQ(toString(requireType("b")), "Packed<string, number>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(requireType("b"), {true}), "{ f: (string, number) -> (string, number) }");
-    else
-        CHECK_EQ(toString(requireType("b"), {true}), "{| f: (string, number) -> (string, number) |}");
+    CHECK_EQ(toString(requireType("b"), {true}), "{ f: (string, number) -> (string, number) }");
+
     REQUIRE(ttvB->instantiatedTypeParams.size() == 1);
     REQUIRE(ttvB->instantiatedTypePackParams.size() == 1);
     CHECK_EQ(toString(ttvB->instantiatedTypeParams[0], {true}), "string");
@@ -353,10 +354,8 @@ local c: Packed<string, number, boolean>
     auto ttvC = get<TableType>(requireType("c"));
     REQUIRE(ttvC);
     CHECK_EQ(toString(requireType("c")), "Packed<string, number, boolean>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(requireType("c"), {true}), "{ f: (string, number, boolean) -> (string, number, boolean) }");
-    else
-        CHECK_EQ(toString(requireType("c"), {true}), "{| f: (string, number, boolean) -> (string, number, boolean) |}");
+    CHECK_EQ(toString(requireType("c"), {true}), "{ f: (string, number, boolean) -> (string, number, boolean) }");
+
     REQUIRE(ttvC->instantiatedTypeParams.size() == 1);
     REQUIRE(ttvC->instantiatedTypePackParams.size() == 1);
     CHECK_EQ(toString(ttvC->instantiatedTypeParams[0], {true}), "string");
@@ -365,6 +364,8 @@ local c: Packed<string, number, boolean>
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_type_packs_import")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
+
     fileResolver.source["game/A"] = R"(
 export type Packed<T, U...> = { a: T, b: (U...) -> () }
 return {}
@@ -386,28 +387,17 @@ local d: { a: typeof(c) }
     REQUIRE(tf);
     CHECK_EQ(toString(*tf), "Packed<T, U...>");
 
-    if (FFlag::LuauSolverV2)
-    {
-        CHECK_EQ(toString(*tf, {true}), "{ a: T, b: (U...) -> () }");
+    CHECK_EQ(toString(*tf, {true}), "{ a: T, b: (U...) -> () }");
 
-        CHECK_EQ(toString(requireType("a"), {true}), "{ a: number, b: () -> () }");
-        CHECK_EQ(toString(requireType("b"), {true}), "{ a: string, b: (number) -> () }");
-        CHECK_EQ(toString(requireType("c"), {true}), "{ a: string, b: (number, boolean) -> () }");
-        CHECK_EQ(toString(requireType("d")), "{ a: Packed<string, number, boolean> }");
-    }
-    else
-    {
-        CHECK_EQ(toString(*tf, {true}), "{| a: T, b: (U...) -> () |}");
-
-        CHECK_EQ(toString(requireType("a"), {true}), "{| a: number, b: () -> () |}");
-        CHECK_EQ(toString(requireType("b"), {true}), "{| a: string, b: (number) -> () |}");
-        CHECK_EQ(toString(requireType("c"), {true}), "{| a: string, b: (number, boolean) -> () |}");
-        CHECK_EQ(toString(requireType("d")), "{| a: Packed<string, number, boolean> |}");
-    }
+    CHECK_EQ(toString(requireType("a"), {true}), "{ a: number, b: () -> () }");
+    CHECK_EQ(toString(requireType("b"), {true}), "{ a: string, b: (number) -> () }");
+    CHECK_EQ(toString(requireType("c"), {true}), "{ a: string, b: (number, boolean) -> () }");
+    CHECK_EQ(toString(requireType("d")), "{ a: Packed<string, number, boolean> }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_pack_type_parameters")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     fileResolver.source["game/A"] = R"(
 export type Packed<T, U...> = { a: T, b: (U...) -> () }
 return {}
@@ -426,31 +416,19 @@ type C<X...> = Import.Packed<string, (number, X...)>
     auto tf = lookupType("Alias");
     REQUIRE(tf);
     CHECK_EQ(toString(*tf), "Alias<S, T, R...>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(*tf, {true}), "{ a: S, b: (T, R...) -> () }");
-    else
-        CHECK_EQ(toString(*tf, {true}), "{| a: S, b: (T, R...) -> () |}");
+    CHECK_EQ(toString(*tf, {true}), "{ a: S, b: (T, R...) -> () }");
 
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(requireType("a"), {true}), "{ a: string, b: (number, boolean) -> () }");
-    else
-        CHECK_EQ(toString(requireType("a"), {true}), "{| a: string, b: (number, boolean) -> () |}");
+    CHECK_EQ(toString(requireType("a"), {true}), "{ a: string, b: (number, boolean) -> () }");
 
     tf = lookupType("B");
     REQUIRE(tf);
     CHECK_EQ(toString(*tf), "B<X...>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(*tf, {true}), "{ a: string, b: (X...) -> () }");
-    else
-        CHECK_EQ(toString(*tf, {true}), "{| a: string, b: (X...) -> () |}");
+    CHECK_EQ(toString(*tf, {true}), "{ a: string, b: (X...) -> () }");
 
     tf = lookupType("C");
     REQUIRE(tf);
     CHECK_EQ(toString(*tf), "C<X...>");
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(*tf, {true}), "{ a: string, b: (number, X...) -> () }");
-    else
-        CHECK_EQ(toString(*tf, {true}), "{| a: string, b: (number, X...) -> () |}");
+    CHECK_EQ(toString(*tf, {true}), "{ a: string, b: (number, X...) -> () }");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_type_packs_nested")
@@ -630,14 +608,6 @@ type Other<S...> = Packed<number, S...>
     CHECK_EQ(toString(result.errors[0]), "Generic type 'Packed<T, U>' expects 2 type arguments, but only 1 is specified");
 
     result = check(R"(
-type Packed<T...> = (T...) -> T...
-local a: Packed
-    )");
-
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(toString(result.errors[0]), "Type parameter list is required");
-
-    result = check(R"(
 type Packed<T..., U...> = (T...) -> (U...)
 type Other = Packed<>
     )");
@@ -652,6 +622,22 @@ type Other = Packed<number, string>
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(toString(result.errors[0]), "Generic type 'Packed<T..., U...>' expects 2 type pack arguments, but only 1 is specified");
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_alias_instantiated_but_missing_parameter_list")
+{
+    ScopedFastFlag sff{FFlag::LuauRemoveGenericErrorForParams, true};
+
+    CheckResult result = check(R"(
+type Packed<T...> = (T...) -> T...
+local a: Packed
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    if (FFlag::LuauSolverV2)
+        CHECK_EQ(toString(result.errors[0]), "Generic type 'Packed<T...>' expects 1 type pack argument, but none are specified");
+    else
+        CHECK_EQ(toString(result.errors[0]), "Type parameter list is required");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_explicit")
@@ -816,7 +802,7 @@ TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_errors2")
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_errors3")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
+    ScopedFastFlag sff{FFlag::LuauAddErrorCaseForIncompatibleTypePacks, true};
 
     CheckResult result = check(R"(
         type Y<T = string, U... = ...string> = { a: (T) -> U... }
@@ -824,12 +810,15 @@ TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_errors3")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(toString(result.errors[0]), "Generic type 'Y<T, U...>' expects at least 1 type argument, but none are specified");
+    if (FFlag::LuauSolverV2)
+        CHECK_EQ(toString(result.errors[0]), "Type parameters must come before type pack parameters");
+    else
+        CHECK_EQ(toString(result.errors[0]), "Generic type 'Y<T, U...>' expects at least 1 type argument, but none are specified");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_errors4")
 {
-    DOES_NOT_PASS_NEW_SOLVER_GUARD();
+    ScopedFastFlag sff{FFlag::LuauRemoveGenericErrorForParams, true};
 
     CheckResult result = check(R"(
         type Packed<T> = (T) -> T
@@ -837,7 +826,10 @@ TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_errors4")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(toString(result.errors[0]), "Type parameter list is required");
+    if (FFlag::LuauSolverV2)
+        CHECK_EQ(toString(result.errors[0]), "Generic type 'Packed<T>' expects 1 type argument, but none are specified");
+    else
+        CHECK_EQ(toString(result.errors[0]), "Type parameter list is required");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_default_type_errors5")
@@ -933,6 +925,7 @@ type C = A<string, (number), (boolean)>
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_defaults_recursive_type")
 {
+    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
     CheckResult result = check(R"(
 type F<K = string, V = (K) -> ()> = (K) -> V
 type R = { m: F<R> }
@@ -940,10 +933,7 @@ type R = { m: F<R> }
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    if (FFlag::LuauSolverV2)
-        CHECK_EQ(toString(*lookupType("R"), {true}), "t1 where t1 = { m: (t1) -> (t1) -> () }");
-    else
-        CHECK_EQ(toString(*lookupType("R"), {true}), "t1 where t1 = {| m: (t1) -> (t1) -> () |}");
+    CHECK_EQ(toString(*lookupType("R"), {true}), "t1 where t1 = { m: (t1) -> (t1) -> () }");
 }
 
 TEST_CASE_FIXTURE(Fixture, "pack_tail_unification_check")

@@ -23,6 +23,8 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauTypeSimplificationIterationLimit, 128)
 LUAU_FASTFLAG(LuauRefineDistributesOverUnions)
 LUAU_FASTFLAGVARIABLE(LuauSimplifyAnyAndUnion)
 LUAU_FASTFLAG(LuauReduceSetTypeStackPressure)
+LUAU_FASTFLAG(LuauPushTypeConstraint)
+LUAU_FASTFLAGVARIABLE(LuauMorePreciseExternTableRelation)
 
 namespace Luau
 {
@@ -264,6 +266,53 @@ static bool isTypeVariable(TypeId ty)
 
 Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen);
 
+Relation relateTableToExternType(const TableType* table, const ExternType* cls, SimplifierSeenSet& seen)
+{
+
+    for (auto& [name, prop] : table->props)
+    {
+        if (auto propInExternType = lookupExternTypeProp(cls, name))
+        {
+            LUAU_ASSERT(prop.readTy && propInExternType->readTy);
+            // For all examples, consider:
+            //
+            //  declare extern type Foobar with
+            //      prop: string | number
+            //  end
+            //
+            switch (relate(*prop.readTy, *propInExternType->readTy, seen))
+            {
+            case Relation::Disjoint:
+                // Consider `{ read prop: boolean }` and `Foobar`, these types are
+                // disjoint as `_.prop` would be `never.
+                return Relation::Disjoint;
+            case Relation::Coincident:
+                // Consider `{ read prop: string | number }` and `Foobar`, we don't really
+                // learn anything about these types.
+                break;
+            case Relation::Intersects:
+                // Consider `{ read prop: string | boolean }` and `Foobar`, these types
+                // intersect (imagine a `Foobar` initialized with `prop = "foo"`).
+                return Relation::Intersects;
+            case Relation::Subset:
+                // Consider `{ read prop: string }` and `Foobar`: we should _roughly_
+                // consider this the same as intersecting.
+                return Relation::Intersects;
+            case Relation::Superset:
+                // This is the only mildly interesting case, consider
+                // `{ read prop: string | number | boolean }` and `Foobar`.
+                // We can _probably_ consider `Foobar` the subset here.
+                break;
+            }
+        }
+    }
+
+    // If all the properties of the table were either coincident or
+    // supersets of the extern property, then we claim that the table
+    // is a superset.
+    return Relation::Superset;
+}
+
 Relation relateTables(TypeId left, TypeId right, SimplifierSeenSet& seen)
 {
     NotNull<const TableType> leftTable{get<TableType>(left)};
@@ -421,7 +470,18 @@ Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen)
         return Relation::Intersects;
 
     if (auto ut = get<UnionType>(left))
+    {
+        if (FFlag::LuauPushTypeConstraint)
+        {
+            for (TypeId part : ut)
+            {
+                Relation r = relate(part, right, seen);
+                if (r == Relation::Superset || r == Relation::Coincident)
+                    return Relation::Superset;
+            }
+        }
         return Relation::Intersects;
+    }
     else if (auto ut = get<UnionType>(right))
     {
         std::vector<Relation> opts;
@@ -582,6 +642,9 @@ Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen)
 
         if (auto re = get<ExternType>(right))
         {
+            if (FFlag::LuauMorePreciseExternTableRelation)
+                return relateTableToExternType(lt, re, seen);
+
             Relation overall = Relation::Coincident;
 
             for (auto& [name, prop] : lt->props)
@@ -622,13 +685,21 @@ Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen)
             return Relation::Disjoint;
         }
 
-        if (is<TableType>(right))
+        if (FFlag::LuauMorePreciseExternTableRelation)
         {
-            // FIXME: This could be better in that we can say a table only
-            // intersects with an extern type if they share a property, but
-            // for now it is within the contract of the function to claim
-            // the two intersect.
-            return Relation::Intersects;
+            if (auto tbl = get<TableType>(right))
+                return flip(relateTableToExternType(tbl, ct, seen));
+        }
+        else
+        {
+            if (is<TableType>(right))
+            {
+                // FIXME: This could be better in that we can say a table only
+                // intersects with an extern type if they share a property, but
+                // for now it is within the contract of the function to claim
+                // the two intersect.
+                return Relation::Intersects;
+            }
         }
 
         return Relation::Disjoint;
@@ -1664,20 +1735,20 @@ TypeId TypeSimplifier::union_(TypeId left, TypeId right)
 
                     switch (r)
                     {
-                        case Relation::Disjoint:
-                        {
-                            TableType result;
-                            result.state = TableState::Sealed;
-                            result.props[propName] = union_(*leftProp.readTy, *rightProp.readTy);
-                            return arena->addType(result);
-                        }
-                        case Relation::Superset:
-                        case Relation::Coincident:
-                            return left;
-                        case Relation::Subset:
-                            return right;
-                        default:
-                            break;
+                    case Relation::Disjoint:
+                    {
+                        TableType result;
+                        result.state = TableState::Sealed;
+                        result.props[propName] = union_(*leftProp.readTy, *rightProp.readTy);
+                        return arena->addType(result);
+                    }
+                    case Relation::Superset:
+                    case Relation::Coincident:
+                        return left;
+                    case Relation::Subset:
+                        return right;
+                    default:
+                        break;
                     }
                 }
             }

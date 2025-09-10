@@ -65,13 +65,7 @@ using namespace Luau;
 struct NonStrictTypeCheckerFixture : Fixture
 {
 
-    NonStrictTypeCheckerFixture()
-    {
-        // Force the frontend
-        getFrontend();
-        registerHiddenTypes(getFrontend());
-        registerTestTypes();
-    }
+    NonStrictTypeCheckerFixture() {}
 
     CheckResult checkNonStrict(const std::string& code)
     {
@@ -91,6 +85,17 @@ struct NonStrictTypeCheckerFixture : Fixture
         LoadDefinitionFileResult res = loadDefinition(definitions);
         LUAU_ASSERT(res.success);
         return getFrontend().check(moduleName);
+    }
+
+    Frontend& getFrontend() override
+    {
+        if (frontend)
+            return *frontend;
+
+        Frontend& f = Fixture::getFrontend();
+        registerHiddenTypes(f);
+        registerTestTypes();
+        return *frontend;
     }
 
     std::string definitions = R"BUILTIN_SRC(

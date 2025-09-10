@@ -2,6 +2,7 @@
 #include "Luau/TypeChecker2.h"
 
 #include "Luau/Ast.h"
+#include "Luau/AstUtils.h"
 #include "Luau/AstQuery.h"
 #include "Luau/Common.h"
 #include "Luau/DcrLogger.h"
@@ -28,19 +29,26 @@
 #include <algorithm>
 #include <sstream>
 
+#include "Luau/Simplify.h"
+
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 
 LUAU_FASTFLAGVARIABLE(LuauSuppressErrorsForMultipleNonviableOverloads)
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
 LUAU_FASTFLAG(LuauInferActualIfElseExprType2)
 LUAU_FASTFLAG(LuauNewNonStrictSuppressSoloConstraintSolvingIncomplete)
+LUAU_FASTFLAG(LuauTrackUniqueness)
 LUAU_FASTFLAG(LuauEagerGeneralization4)
-LUAU_FASTFLAG(LuauResetConditionalContextProperly)
 LUAU_FASTFLAG(LuauNameConstraintRestrictRecursiveTypes)
+LUAU_FASTFLAG(LuauSubtypingGenericPacksDoesntUseVariance)
 
 LUAU_FASTFLAGVARIABLE(LuauIceLess)
 LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
 LUAU_FASTFLAGVARIABLE(LuauAllowMixedTables)
+LUAU_FASTFLAGVARIABLE(LuauSimplifyIntersectionForLiteralSubtypeCheck)
+LUAU_FASTFLAGVARIABLE(LuauRemoveGenericErrorForParams)
+LUAU_FASTFLAG(LuauNoConstraintGenRecursionLimitIce)
+LUAU_FASTFLAGVARIABLE(LuauAddErrorCaseForIncompatibleTypePacks)
 
 namespace Luau
 {
@@ -565,6 +573,10 @@ TypeId TypeChecker2::lookupAnnotation(AstType* annotation)
     }
 
     TypeId* ty = module->astResolvedTypes.find(annotation);
+
+    if (FFlag::LuauNoConstraintGenRecursionLimitIce && module->constraintGenerationDidNotComplete && !ty)
+        return builtinTypes->anyType;
+
     LUAU_ASSERT(ty);
     return checkForTypeFunctionInhabitance(follow(*ty), annotation->location);
 }
@@ -1247,6 +1259,10 @@ void TypeChecker2::visit(AstStatCompoundAssign* stat)
     visit(&fake, stat);
 
     TypeId* resultTy = module->astCompoundAssignResultTypes.find(stat);
+
+    if (FFlag::LuauNoConstraintGenRecursionLimitIce && module->constraintGenerationDidNotComplete && !resultTy)
+        return;
+
     LUAU_ASSERT(resultTy);
     TypeId varTy = lookupType(stat->var);
 
@@ -1630,7 +1646,6 @@ void TypeChecker2::visitCall(AstExprCall* call)
         }
     }
 
-
     OverloadResolver resolver{
         builtinTypes,
         NotNull{&module->internalTypes},
@@ -1642,7 +1657,11 @@ void TypeChecker2::visitCall(AstExprCall* call)
         limits,
         call->location,
     };
-    resolver.resolve(fnTy, &args, call->func, &argExprs);
+    DenseHashSet<TypeId> uniqueTypes{nullptr};
+    if (FFlag::LuauTrackUniqueness)
+        findUniqueTypes(NotNull{&uniqueTypes}, argExprs, NotNull{&module->astTypes});
+
+    resolver.resolve(fnTy, &args, call->func, &argExprs, NotNull{&uniqueTypes});
 
     auto norm = normalizer.normalize(fnTy);
     if (!norm)
@@ -1734,11 +1753,10 @@ void TypeChecker2::visitCall(AstExprCall* call)
 
 void TypeChecker2::visit(AstExprCall* call)
 {
-    std::optional<InConditionalContext> flipper;
-    if (FFlag::LuauResetConditionalContextProperly)
-        flipper.emplace(&typeContext, TypeContext::Default);
-    visit(call->func, ValueContext::RValue);
-    flipper.reset();
+    {
+        InConditionalContext flipper(&typeContext, TypeContext::Default);
+        visit(call->func, ValueContext::RValue);
+    }
 
     for (AstExpr* arg : call->args)
         visit(arg, ValueContext::RValue);
@@ -1898,9 +1916,7 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
 
 void TypeChecker2::visit(AstExprFunction* fn)
 {
-    std::optional<InConditionalContext> flipper;
-    if (FFlag::LuauResetConditionalContextProperly)
-        flipper.emplace(&typeContext, TypeContext::Default);
+    InConditionalContext flipper(&typeContext, TypeContext::Default);
 
     auto StackPusher = pushStack(fn);
 
@@ -1916,7 +1932,9 @@ void TypeChecker2::visit(AstExprFunction* fn)
     }
     else if (get<ErrorType>(normalizedFnTy->errors))
     {
-        // Nothing
+        // If we have an error type, we don't want to do anything else involving the normalized type
+        if (FFlag::LuauNoConstraintGenRecursionLimitIce)
+            normalizedFnTy = nullptr;
     }
     else if (!normalizedFnTy->hasFunctions())
     {
@@ -2055,9 +2073,7 @@ void TypeChecker2::visit(AstExprFunction* fn)
 
 void TypeChecker2::visit(AstExprTable* expr)
 {
-    std::optional<InConditionalContext> inContext;
-    if (FFlag::LuauResetConditionalContextProperly)
-        inContext.emplace(&typeContext, TypeContext::Default);
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
 
     for (const AstExprTable::Item& item : expr->items)
     {
@@ -2070,7 +2086,7 @@ void TypeChecker2::visit(AstExprTable* expr)
 void TypeChecker2::visit(AstExprUnary* expr)
 {
     std::optional<InConditionalContext> inContext;
-    if (FFlag::LuauResetConditionalContextProperly && expr->op != AstExprUnary::Op::Not)
+    if (expr->op != AstExprUnary::Op::Not)
         inContext.emplace(&typeContext, TypeContext::Default);
 
     visit(expr->expr, ValueContext::RValue);
@@ -2165,11 +2181,9 @@ void TypeChecker2::visit(AstExprUnary* expr)
 TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
 {
     std::optional<InConditionalContext> inContext;
-    if (FFlag::LuauResetConditionalContextProperly)
-    {
-        if (expr->op != AstExprBinary::And && expr->op != AstExprBinary::Or && expr->op != AstExprBinary::CompareEq && expr->op != AstExprBinary::CompareNe)
-            inContext.emplace(&typeContext, TypeContext::Default);
-    }
+    if (expr->op != AstExprBinary::And && expr->op != AstExprBinary::Or && expr->op != AstExprBinary::CompareEq &&
+        expr->op != AstExprBinary::CompareNe)
+        inContext.emplace(&typeContext, TypeContext::Default);
 
     visit(expr->left, ValueContext::RValue);
     visit(expr->right, ValueContext::RValue);
@@ -2550,9 +2564,7 @@ void TypeChecker2::visit(AstExprTypeAssertion* expr)
 
 void TypeChecker2::visit(AstExprIfElse* expr)
 {
-    std::optional<InConditionalContext> inContext;
-    if (FFlag::LuauResetConditionalContextProperly)
-        inContext.emplace(&typeContext, TypeContext::Default);
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
 
     visit(expr->condition, ValueContext::RValue);
     visit(expr->trueExpr, ValueContext::RValue);
@@ -2561,9 +2573,7 @@ void TypeChecker2::visit(AstExprIfElse* expr)
 
 void TypeChecker2::visit(AstExprInterpString* interpString)
 {
-    std::optional<InConditionalContext> inContext;
-    if (FFlag::LuauResetConditionalContextProperly)
-        inContext.emplace(&typeContext, TypeContext::Default);
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
 
     for (AstExpr* expr : interpString->expressions)
         visit(expr, ValueContext::RValue);
@@ -2698,11 +2708,14 @@ void TypeChecker2::visit(AstTypeReference* ty)
             }
         );
 
-        if (!ty->hasParameterList)
+        if (!FFlag::LuauRemoveGenericErrorForParams)
         {
-            if ((!alias->typeParams.empty() && !hasDefaultTypes) || (!alias->typePackParams.empty() && !hasDefaultPacks))
+            if (!ty->hasParameterList)
             {
-                reportError(GenericError{"Type parameter list is required"}, ty->location);
+                if ((!alias->typeParams.empty() && !hasDefaultTypes) || (!alias->typePackParams.empty() && !hasDefaultPacks))
+                {
+                    reportError(GenericError{"Type parameter list is required"}, ty->location);
+                }
             }
         }
 
@@ -2746,6 +2759,15 @@ void TypeChecker2::visit(AstTypeReference* ty)
             }
         }
 
+        if (FFlag::LuauAddErrorCaseForIncompatibleTypePacks)
+        {
+            // If we require type parameters, but no types are provided and only packs are provided, we report an error.
+            if (typesRequired != 0 && typesProvided == 0 && packsProvided != 0)
+            {
+                reportError(GenericError{"Type parameters must come before type pack parameters"}, ty->location);
+            }
+        }
+
         if (extraTypes != 0 && packsProvided == 0)
         {
             // Extra types are only collected into a pack if a pack is expected
@@ -2771,9 +2793,16 @@ void TypeChecker2::visit(AstTypeReference* ty)
             }
         }
 
-        if (extraTypes == 0 && packsProvided + 1 == packsRequired)
+        if (FFlag::LuauRemoveGenericErrorForParams)
         {
-            packsProvided += 1;
+            // If the type parameter list is explicitly provided, allow an empty type pack to satisfy the expected pack count.
+            if (extraTypes == 0 && packsProvided + 1 == packsRequired && ty->hasParameterList)
+                packsProvided += 1;
+        }
+        else
+        {
+            if (extraTypes == 0 && packsProvided + 1 == packsRequired)
+                packsProvided += 1;
         }
 
         if (typesProvided != typesRequired || packsProvided != packsRequired)
@@ -2915,14 +2944,22 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         if (reasoning.subPath.empty() && reasoning.superPath.empty())
             continue;
 
-        std::optional<TypeOrPack> optSubLeaf =
-            FFlag::LuauReturnMappedGenericPacksFromSubtyping2
-                ? traverse(subTy, reasoning.subPath, builtinTypes, NotNull{&r.mappedGenericPacks}, subtyping->arena)
-                : traverse_DEPRECATED(subTy, reasoning.subPath, builtinTypes);
-        std::optional<TypeOrPack> optSuperLeaf =
-            FFlag::LuauReturnMappedGenericPacksFromSubtyping2
-                ? traverse(superTy, reasoning.superPath, builtinTypes, NotNull{&r.mappedGenericPacks}, subtyping->arena)
-                : traverse_DEPRECATED(superTy, reasoning.superPath, builtinTypes);
+        std::optional<TypeOrPack> optSubLeaf;
+        if (FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
+            optSubLeaf = traverse(subTy, reasoning.subPath, builtinTypes, subtyping->arena);
+        else if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
+            optSubLeaf = traverse_DEPRECATED(subTy, reasoning.subPath, builtinTypes, NotNull{&r.mappedGenericPacks_DEPRECATED}, subtyping->arena);
+        else
+            optSubLeaf = traverse_DEPRECATED(subTy, reasoning.subPath, builtinTypes);
+
+        std::optional<TypeOrPack> optSuperLeaf;
+        if (FFlag::LuauSubtypingGenericPacksDoesntUseVariance)
+            optSuperLeaf = traverse(superTy, reasoning.superPath, builtinTypes, subtyping->arena);
+        else if (FFlag::LuauReturnMappedGenericPacksFromSubtyping2)
+            optSuperLeaf =
+                traverse_DEPRECATED(superTy, reasoning.superPath, builtinTypes, NotNull{&r.mappedGenericPacks_DEPRECATED}, subtyping->arena);
+        else
+            optSuperLeaf = traverse_DEPRECATED(superTy, reasoning.superPath, builtinTypes);
 
         if (!optSubLeaf || !optSuperLeaf)
         {
@@ -2948,7 +2985,9 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         {
             if (FFlag::LuauIceLess)
             {
-                reportError(InternalError{"Subtyping test returned a reasoning where one path ends at a type and the other ends at a pack."}, location);
+                reportError(
+                    InternalError{"Subtyping test returned a reasoning where one path ends at a type and the other ends at a pack."}, location
+                );
                 return {}; // TODO test this?
             }
             else
@@ -3112,6 +3151,19 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
             std::optional<TypeId> tt = extractMatchingTableType(parts, exprType, builtinTypes);
             if (tt)
                 return testPotentialLiteralIsSubtype(expr, *tt);
+        }
+
+        if (FFlag::LuauSimplifyIntersectionForLiteralSubtypeCheck)
+        {
+            if (auto itv = get<IntersectionType>(expectedType))
+            {
+                // If we _happen_ to have an intersection of tables, let's try to
+                // construct it and use it as the input to this algorithm.
+                std::set<TypeId> parts{begin(itv), end(itv)};
+                TypeId simplified = simplifyIntersection(builtinTypes, NotNull{&module->internalTypes}, std::move(parts)).result;
+                if (is<TableType>(simplified))
+                    return testPotentialLiteralIsSubtype(expr, simplified);
+            }
         }
 
         return testIsSubtype(exprType, expectedType, expr->location);

@@ -6,10 +6,8 @@
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/Type.h"
-#include "Luau/VisitType.h"
 
 #include "Fixture.h"
-#include "ClassFixture.h"
 #include "ScopedFlags.h"
 
 #include "doctest.h"
@@ -33,8 +31,8 @@ LUAU_FASTFLAG(LuauNewNonStrictSuppressSoloConstraintSolvingIncomplete)
 LUAU_FASTFLAG(LuauReturnMappedGenericPacksFromSubtyping2)
 LUAU_FASTFLAG(LuauMissingFollowMappedGenericPacks)
 LUAU_FASTFLAG(LuauOccursCheckInCommit)
-LUAU_FASTFLAG(LuauTrackFreeInteriorTypePacks)
-LUAU_FASTFLAG(LuauResetConditionalContextProperly)
+LUAU_FASTFLAG(LuauParametrizedAttributeSyntax)
+LUAU_FASTFLAG(LuauNoConstraintGenRecursionLimitIce)
 
 using namespace Luau;
 
@@ -668,6 +666,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tc_after_error_recovery_no_replacement_name_
     }
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "invalide_deprecated_attribute_doesn't_chrash_checker")
+{
+    ScopedFastFlag sff{FFlag::LuauParametrizedAttributeSyntax, true};
+    CheckResult result = check(R"(
+@[deprecated{ reason = reasonString }]
+function hello(x: number, y: number): number
+    return x + y
+end)");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "index_expr_should_be_checked")
 {
     CheckResult result = check(R"(
@@ -1269,9 +1279,9 @@ TEST_CASE_FIXTURE(Fixture, "follow_on_new_types_in_substitution")
 TEST_CASE_FIXTURE(Fixture, "types_stored_in_astResolvedTypes")
 {
     CheckResult result = check(R"(
-type alias = typeof("hello")
-local function foo(param: alias)
-end
+        type alias = typeof("hello")
+        local function foo(param: alias)
+        end
     )");
 
     auto node = findNodeAtPosition(*getMainSourceModule(), {2, 16});
@@ -2015,8 +2025,6 @@ TEST_CASE_FIXTURE(Fixture, "fuzz_generalize_one_remove_type_assert")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
         {FFlag::LuauEagerGeneralization4, true},
-        {FFlag::LuauTrackFreeInteriorTypePacks, true},
-        {FFlag::LuauResetConditionalContextProperly, true}
     };
 
     auto result = check(R"(
@@ -2052,8 +2060,6 @@ TEST_CASE_FIXTURE(Fixture, "fuzz_generalize_one_remove_type_assert_2")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
         {FFlag::LuauEagerGeneralization4, true},
-        {FFlag::LuauTrackFreeInteriorTypePacks, true},
-        {FFlag::LuauResetConditionalContextProperly, true}
     };
 
     CheckResult result = check(R"(
@@ -2087,8 +2093,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "fuzz_simplify_combinatorial_explosion")
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
         {FFlag::LuauEagerGeneralization4, true},
-        {FFlag::LuauTrackFreeInteriorTypePacks, true},
-        {FFlag::LuauResetConditionalContextProperly, true}
     };
 
     LUAU_REQUIRE_ERRORS(check(R"(
@@ -2288,7 +2292,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "config_reader_example")
     // test suite starts, which will cause an assert if we try to eagerly
     // generalize _after_ the test is set up. Additionally, this code block
     // crashes under the new solver without flags.
-    if (!FFlag::LuauEagerGeneralization4)
+    if (!(FFlag::LuauEagerGeneralization4 && FFlag::LuauSolverV2))
         return;
 
     fileResolver.source["game/ConfigReader"] = R"(
@@ -2366,8 +2370,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_remover_heap_use_after_free")
 {
     ScopedFastFlag sff[] = {
         {FFlag::LuauEagerGeneralization4, true},
-        {FFlag::LuauTrackFreeInteriorTypePacks, true},
-        {FFlag::LuauResetConditionalContextProperly, true}
     };
 
     LUAU_REQUIRE_ERRORS(check(R"(
@@ -2590,16 +2592,12 @@ end
 _()(_())("",_.n0,_,_(_,true,(_)))
 do end
     )"));
-
 }
 
 TEST_CASE_FIXTURE(Fixture, "txnlog_checks_for_occurrence_before_self_binding_a_type")
 {
-    ScopedFastFlag sff[] = {
-        {FFlag::LuauSolverV2, false},
-        {FFlag::LuauOccursCheckInCommit, true}
-    };
-    
+    ScopedFastFlag sff[] = {{FFlag::LuauSolverV2, false}, {FFlag::LuauOccursCheckInCommit, true}};
+
 
     CheckResult result = check(R"(
         local any = nil :: any
@@ -2637,6 +2635,46 @@ TEST_CASE_FIXTURE(Fixture, "txnlog_checks_for_occurrence_before_self_binding_a_t
 
         return f4
     )");
+}
+
+TEST_CASE_FIXTURE(Fixture, "constraint_generation_recursion_limit")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuauNoConstraintGenRecursionLimitIce, true}};
+    // Lowers the recursion limit for the constraint generator
+    ScopedFastInt i{FInt::LuauCheckRecursionLimit, 5};
+
+    // This shouldn't ICE
+    CheckResult result = check(R"(
+        if true then
+        elseif true then
+        elseif true then
+        elseif true then
+        else
+        local x = 1
+        end
+    )");
+}
+
+// https://github.com/luau-lang/luau/issues/1971
+TEST_CASE_FIXTURE(Fixture, "nested_functions_can_depend_on_outer_generics")
+{
+    CheckResult result = check(R"(
+        function name<P>(arg1: P)
+            return function(what: P) return what end
+        end
+
+        local funcTest = name(nil)
+        local out = funcTest(1) -- Doesn't report type mismatch error anymore
+    )");
+
+    CHECK("(nil) -> nil" == toString(requireType("funcTest")));
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    auto tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE_MESSAGE(tm, "Expected TypeMismatch but got " << result.errors[0]);
+
+    CHECK("nil" == toString(tm->wantedType));
+    CHECK("number" == toString(tm->givenType));
 }
 
 TEST_SUITE_END();
