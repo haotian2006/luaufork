@@ -1,11 +1,11 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
-#include "Luau/Config.h"
-#include "Luau/ModuleResolver.h"
-#include "Luau/TypeInfer.h"
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/Config.h"
 #include "Luau/Frontend.h"
+#include "Luau/ModuleResolver.h"
+#include "Luau/PrettyPrinter.h"
 #include "Luau/TypeAttach.h"
-#include "Luau/Transpiler.h"
+#include "Luau/TypeInfer.h"
 
 #include "Luau/AnalyzeRequirer.h"
 #include "Luau/FileUtils.h"
@@ -113,7 +113,7 @@ static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName&
 
         Luau::attachTypeData(*sm, *m);
 
-        std::string annotated = Luau::transpileWithTypes(*sm->root);
+        std::string annotated = Luau::prettyPrintWithTypes(*sm->root);
 
         printf("%s", annotated.c_str());
     }
@@ -421,9 +421,10 @@ int main(int argc, char** argv)
 
         checkedModules = frontend.checkQueuedModules(
             std::nullopt,
-            [&](std::function<void()> f)
+            [&](std::vector<std::function<void()>> tasks)
             {
-                scheduler.push(std::move(f));
+                for (auto& task : tasks)
+                    scheduler.push(std::move(task));
             }
         );
     }

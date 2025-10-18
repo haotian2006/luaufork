@@ -178,6 +178,7 @@ struct ConstraintSolver
         ConstraintSet constraintSet
     );
 
+    // TODO CLI-169086: Replace all uses of this constructor with the ConstraintSet constructor, above.
     explicit ConstraintSolver(
         NotNull<Normalizer> normalizer,
         NotNull<Simplifier> simplifier,
@@ -299,7 +300,7 @@ public:
         ValueContext context,
         bool inConditional,
         bool suppressSimplification,
-        DenseHashSet<TypeId>& seen
+        Set<TypeId>& seen
     );
 
     /**
@@ -461,7 +462,12 @@ public:
     void reproduceConstraints(NotNull<Scope> scope, const Location& location, const Substitution& subst);
 
     TypeId simplifyIntersection(NotNull<Scope> scope, Location location, TypeId left, TypeId right);
-    TypeId simplifyIntersection(NotNull<Scope> scope, Location location, std::set<TypeId> parts);
+
+    // Clip with LuauSimplifyIntersectionNoTreeSet
+    TypeId simplifyIntersection_DEPRECATED(NotNull<Scope> scope, Location location, std::set<TypeId> parts);
+
+    TypeId simplifyIntersection(NotNull<Scope> scope, Location location, TypeIds parts);
+
     TypeId simplifyUnion(NotNull<Scope> scope, Location location, TypeId left, TypeId right);
 
     TypePackId anyifyModuleReturnTypePackGenerics(TypePackId tp);

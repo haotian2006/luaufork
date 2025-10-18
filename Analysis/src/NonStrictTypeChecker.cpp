@@ -20,10 +20,9 @@
 
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 
-LUAU_FASTFLAGVARIABLE(LuauNewNonStrictMoreUnknownSymbols)
-LUAU_FASTFLAGVARIABLE(LuauNewNonStrictNoErrorsPassingNever)
 LUAU_FASTFLAGVARIABLE(LuauNewNonStrictSuppressesDynamicRequireErrors)
 LUAU_FASTFLAG(LuauEmplaceNotPushBack)
+LUAU_FASTFLAGVARIABLE(LuauUnreducedTypeFunctionsDontTriggerWarnings)
 
 namespace Luau
 {
@@ -349,24 +348,11 @@ struct NonStrictTypeChecker
         NonStrictContext condB = visit(ifStatement->condition, ValueContext::RValue);
         NonStrictContext branchContext;
 
-        if (FFlag::LuauNewNonStrictMoreUnknownSymbols)
+        NonStrictContext thenBody = visit(ifStatement->thenbody);
+        if (ifStatement->elsebody)
         {
-            NonStrictContext thenBody = visit(ifStatement->thenbody);
-            if (ifStatement->elsebody)
-            {
-                NonStrictContext elseBody = visit(ifStatement->elsebody);
-                branchContext = NonStrictContext::conjunction(builtinTypes, arena, thenBody, elseBody);
-            }
-        }
-        else
-        {
-            // If there is no else branch, don't bother generating warnings for the then branch - we can't prove there is an error
-            if (ifStatement->elsebody)
-            {
-                NonStrictContext thenBody = visit(ifStatement->thenbody);
-                NonStrictContext elseBody = visit(ifStatement->elsebody);
-                branchContext = NonStrictContext::conjunction(builtinTypes, arena, thenBody, elseBody);
-            }
+            NonStrictContext elseBody = visit(ifStatement->elsebody);
+            branchContext = NonStrictContext::conjunction(builtinTypes, arena, thenBody, elseBody);
         }
 
         return NonStrictContext::disjunction(builtinTypes, arena, condB, branchContext);
@@ -623,12 +609,9 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstExprCall* call)
     {
-        if (FFlag::LuauNewNonStrictMoreUnknownSymbols)
-        {
-            visit(call->func, ValueContext::RValue);
-            for (auto arg : call->args)
-                visit(arg, ValueContext::RValue);
-        }
+        visit(call->func, ValueContext::RValue);
+        for (auto arg : call->args)
+            visit(arg, ValueContext::RValue);
 
         NonStrictContext fresh{};
         TypeId* originalCallTy = module->astOriginalCallTypes.find(call->func);
@@ -717,13 +700,13 @@ struct NonStrictTypeChecker
                 AstExpr* arg = arguments[i];
                 if (auto runTimeFailureType = willRunTimeError(arg, fresh))
                 {
-                    if (FFlag::LuauNewNonStrictNoErrorsPassingNever)
+                    if (FFlag::LuauUnreducedTypeFunctionsDontTriggerWarnings)
+                        reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
+                    else
                     {
                         if (!get<NeverType>(follow(*runTimeFailureType)))
                             reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
                     }
-                    else
-                        reportError(CheckedFunctionCallError{argTypes[i], *runTimeFailureType, functionName, i}, arg->location);
                 }
             }
 
@@ -1187,6 +1170,8 @@ struct NonStrictTypeChecker
             {
 
                 TypeId actualType = lookupType(fragment);
+                if (FFlag::LuauUnreducedTypeFunctionsDontTriggerWarnings && shouldSkipRuntimeErrorTesting(actualType))
+                    continue;
                 SubtypingResult r = subtyping.isSubtype(actualType, *contextTy, scope);
                 if (r.normalizationTooComplex)
                     reportError(NormalizationTooComplex{}, fragment->location);
@@ -1227,6 +1212,12 @@ private:
         if (!cachedResult)
             cachedResult = arena->addType(NegationType{baseType});
         return cachedResult;
+    }
+
+    bool shouldSkipRuntimeErrorTesting(TypeId test)
+    {
+        TypeId t = follow(test);
+        return is<NeverType, TypeFunctionInstanceType>(t);
     }
 };
 

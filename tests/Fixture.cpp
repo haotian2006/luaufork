@@ -9,10 +9,10 @@
 #include "Luau/ModuleResolver.h"
 #include "Luau/NotNull.h"
 #include "Luau/Parser.h"
+#include "Luau/PrettyPrinter.h"
 #include "Luau/Type.h"
 #include "Luau/TypeAttach.h"
 #include "Luau/TypeInfer.h"
-#include "Luau/Transpiler.h"
 
 #include "doctest.h"
 
@@ -29,6 +29,7 @@ LUAU_FASTFLAG(LuauSolverV2);
 LUAU_FASTFLAG(DebugLuauLogSolverToJsonFile)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauForceAllNewSolverTests);
+LUAU_FASTFLAG(LuauBuiltinTypeFunctionsArentGlobal)
 
 extern std::optional<unsigned> randomSeed; // tests/main.cpp
 
@@ -578,7 +579,7 @@ std::string Fixture::decorateWithTypes(const std::string& code)
     SourceModule* sourceModule = getFrontend().getSourceModule(mainModuleName);
     attachTypeData(*sourceModule, *getFrontend().moduleResolver.getModule(mainModuleName));
 
-    return transpileWithTypes(*sourceModule->root);
+    return prettyPrintWithTypes(*sourceModule->root);
 }
 
 void Fixture::dumpErrors(std::ostream& os, const std::vector<TypeError>& errors)
@@ -687,6 +688,11 @@ NotNull<BuiltinTypes> Fixture::getBuiltins()
     if (!builtinTypes)
         getFrontend();
     return NotNull{builtinTypes};
+}
+
+const BuiltinTypeFunctions& Fixture::getBuiltinTypeFunctions()
+{
+    return FFlag::LuauBuiltinTypeFunctionsArentGlobal ? *getBuiltins()->typeFunctions : builtinTypeFunctions_DEPRECATED();
 }
 
 Frontend& Fixture::getFrontend()

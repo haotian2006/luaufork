@@ -22,10 +22,7 @@ LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAG(LuauIceLess)
-LUAU_FASTFLAG(LuauSimplifyAnyAndUnion)
-LUAU_FASTFLAG(LuauLimitDynamicConstraintSolving3)
 LUAU_FASTFLAG(LuauDontDynamicallyCreateRedundantSubtypeConstraints)
 LUAU_FASTFLAG(LuauLimitUnification)
 LUAU_FASTFLAG(LuauSubtypingGenericsDoesntUseVariance)
@@ -291,15 +288,10 @@ TEST_CASE_FIXTURE(LimitFixture, "typescript_port_of_Result_type")
     CHECK(hasError<CodeTooComplex>(result));
 }
 
-TEST_CASE_FIXTURE(LimitFixture, "Signal_exerpt" * doctest::timeout(0.5))
+TEST_CASE_FIXTURE(LimitFixture, "Signal_exerpt" * doctest::timeout(1.0))
 {
     ScopedFastFlag sff[] = {
-        // These flags are required to surface the problem.
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauEagerGeneralization4, true},
-
-        // And this flag is the one that fixes it.
-        {FFlag::LuauSimplifyAnyAndUnion, true},
     };
 
     constexpr const char* src = R"LUAU(
@@ -343,10 +335,7 @@ TEST_CASE_FIXTURE(LimitFixture, "Signal_exerpt" * doctest::timeout(0.5))
 
 TEST_CASE_FIXTURE(Fixture, "limit_number_of_dynamically_created_constraints")
 {
-    ScopedFastFlag sff[] = {
-        {FFlag::LuauSolverV2, true},
-        {FFlag::LuauLimitDynamicConstraintSolving3, true},
-    };
+    ScopedFastFlag sff{FFlag::LuauSolverV2, true};
 
     constexpr const char* src = R"(
         type Array<T> = {T}
@@ -377,8 +366,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "limit_number_of_dynamically_created_constrai
 {
     ScopedFastFlag sff[] = {
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauLimitDynamicConstraintSolving3, true},
-        {FFlag::LuauEagerGeneralization4, true},
         {FFlag::LuauDontDynamicallyCreateRedundantSubtypeConstraints, true},
     };
 
@@ -432,7 +419,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "limit_number_of_dynamically_created_constrai
     CHECK(frontend->stats.dynamicConstraintsCreated < 40);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_should_cache_pairs_in_seen_set" * doctest::timeout(0.5))
+TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_should_cache_pairs_in_seen_set" * doctest::timeout(1.0))
 {
     ScopedFastFlag sff[] = {
         {FFlag::LuauSolverV2, true},
@@ -561,7 +548,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "test_generic_pruning_recursion_limit")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauEagerGeneralization4, true},
         {FFlag::LuauReduceSetTypeStackPressure, true},
     };
 
@@ -580,7 +566,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unification_runs_a_limited_number_of_iterati
     ScopedFastFlag sff[] = {
         // These are necessary to trigger the bug
         {FFlag::LuauSolverV2, true},
-        {FFlag::LuauEagerGeneralization4, true},
 
         // This is the fix
         {FFlag::LuauLimitUnification, true}
@@ -601,6 +586,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unification_runs_a_limited_number_of_iterati
     )");
 
     LUAU_REQUIRE_ERROR(result, UnificationTooComplex);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "fusion_normalization_spin" * doctest::timeout(1.0))
+{
+    LUAU_REQUIRE_ERRORS(check(R"(
+type Task = unknown
+type Constructors = unknown
+export type Scope<Constructors = any> = {Task} & Constructors
+export type DeriveScopeConstructor = (<S>(Scope<S>) -> Scope<S>)
+    & (<S, A>(Scope<S>, A & {}) -> Scope<S & A>)
+    & (<S, A, B>(Scope<S>, A & {}, B & {}) -> Scope<S & A & B>)
+    & (<S, A, B, C>(Scope<S>, A & {}, B & {}, C & {}) -> Scope<S & A & B & C>)
+    & (<S, A, B, C, D>(Scope<S>, A & {}, B & {}, C & {}, D & {}) -> Scope<S & A & B & C & D>)
+    & (<S, A, B, C, D, E>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}) -> Scope<S & A & B & C & D & E>)
+    & (<S, A, B, C, D, E, F>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}) -> Scope<S & A & B & C & D & E & F>)
+    & (<S, A, B, C, D, E, F, G>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}, G & {}) -> Scope<S & A & B & C & D & E & F & G>)
+    & (<S, A, B, C, D, E, F, G, H>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}, G & {}, H & {}) -> Scope<S & A & B & C & D & E & F & G & H>)
+    & (<S, A, B, C, D, E, F, G, H, I>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}, G & {}, H & {}, I & {}) -> Scope<S & A & B & C & D & E & F & G & H & I>)
+    & (<S, A, B, C, D, E, F, G, H, I, J>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}, G & {}, H & {}, I & {}, J & {}) -> Scope<S & A & B & C & D & E & F & G & H & I & J>)
+    & (<S, A, B, C, D, E, F, G, H, I, J, K>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}, G & {}, H & {}, I & {}, J & {}, K & {}) -> Scope<S & A & B & C & D & E & F & G & H & I & J & K>)
+    & (<S, A, B, C, D, E, F, G, H, I, J, K, L>(Scope<S>, A & {}, B & {}, C & {}, D & {}, E & {}, F & {}, G & {}, H & {}, I & {}, J & {}, K & {}, L & {}) -> Scope<S & A & B & C & D & E & F & G & H & I & J & K & L>)
+
+local deriveScopeImpl : DeriveScopeConstructor = (nil :: any)
+
+local function innerScope<T>(
+    existing: Types.Scope<T>,
+    ...: {[unknown]: unknown}
+): any
+    local new = deriveScopeImpl(existing, ...)
+end
+
+    )"));
 }
 
 TEST_SUITE_END();

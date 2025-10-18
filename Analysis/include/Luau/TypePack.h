@@ -231,7 +231,7 @@ bool isEmpty(TypePackId tp);
 /// Flattens out a type pack.  Also returns a valid TypePackId tail if the type pack's full size is not known
 std::pair<std::vector<TypeId>, std::optional<TypePackId>> flatten(TypePackId tp);
 std::pair<std::vector<TypeId>, std::optional<TypePackId>> flatten(TypePackId tp, const TxnLog& log);
-// TODO: Clip with LuauSubtypingGenericPacksDoesntUseVariance
+// TODO: Clip with LuauSubtypingGenericPacksDoesntUseVariance2
 std::pair<std::vector<TypeId>, std::optional<TypePackId>> flatten_DEPRECATED(
     TypePackId tp,
     const DenseHashMap<TypePackId, TypePackId>& mappedGenericPacks
@@ -267,7 +267,7 @@ LUAU_NOINLINE Unifiable::Bound<TypePackId>* emplaceTypePack<BoundTypePack>(TypeP
 TypePackId sliceTypePack(
     size_t sliceIndex,
     TypePackId toBeSliced,
-    std::vector<TypeId>& head,
+    const std::vector<TypeId>& head,
     std::optional<TypePackId> tail,
     NotNull<BuiltinTypes> builtinTypes,
     NotNull<TypeArena> arena

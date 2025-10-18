@@ -33,11 +33,9 @@ LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAGVARIABLE(DebugLogFragmentsFromAutocomplete)
 LUAU_FASTFLAG(LuauUseWorkspacePropToChooseSolver)
 LUAU_FASTFLAGVARIABLE(LuauFragmentRequiresCanBeResolvedToAModule)
-LUAU_FASTFLAG(LuauFragmentAutocompleteTracksRValueRefinements)
 LUAU_FASTFLAGVARIABLE(LuauPopulateSelfTypesInFragment)
 LUAU_FASTFLAGVARIABLE(LuauForInProvidesRecommendations)
-LUAU_FASTFLAGVARIABLE(LuauFragmentAutocompleteTakesInnermostRefinement)
-LUAU_FASTFLAG(LuauSuggestHotComments)
+LUAU_FASTFLAGVARIABLE(LuauForInRangesConsiderInLocation)
 
 namespace Luau
 {
@@ -198,7 +196,13 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
                         if (!forIn->hasIn)
                             return nonEmpty;
                         else
-                            return Location{forIn->inLocation.begin, cursorPosition};
+                        {
+                            // [for ... in ... do] - the cursor can either be between [for ... in] or [in ... do]
+                            if (FFlag::LuauForInRangesConsiderInLocation && cursorPosition < forIn->inLocation.begin)
+                                return nonEmpty;
+                            else
+                                return Location{forIn->inLocation.begin, cursorPosition};
+                        }
                     }
                 }
                 return empty;
@@ -606,14 +610,9 @@ struct UsageFinder : public AstVisitor
             mentionedDefs.insert(ref->def);
         if (auto local = expr->as<AstExprLocal>())
         {
-            if (FFlag::LuauFragmentAutocompleteTracksRValueRefinements)
-            {
-                auto def = dfg->getDef(local);
-                localBindingsReferenced.emplace_back(def, local->local);
-                symbolsToRefine.emplace_back(def, Symbol(local->local));
-            }
-            else
-                localBindingsReferenced.emplace_back(dfg->getDef(local), local->local);
+            auto def = dfg->getDef(local);
+            localBindingsReferenced.emplace_back(def, local->local);
+            symbolsToRefine.emplace_back(def, Symbol(local->local));
         }
         return true;
     }
@@ -621,11 +620,8 @@ struct UsageFinder : public AstVisitor
     bool visit(AstExprGlobal* global) override
     {
         globalDefsToPrePopulate.emplace_back(global->name, dfg->getDef(global));
-        if (FFlag::LuauFragmentAutocompleteTracksRValueRefinements)
-        {
-            auto def = dfg->getDef(global);
-            symbolsToRefine.emplace_back(def, Symbol(global->name));
-        }
+        auto def = dfg->getDef(global);
+        symbolsToRefine.emplace_back(def, Symbol(global->name));
         return true;
     }
 
@@ -691,44 +687,26 @@ void cloneTypesFromFragment(
         }
     }
 
-    if (FFlag::LuauFragmentAutocompleteTracksRValueRefinements)
+    for (const auto& [d, syms] : f.symbolsToRefine)
     {
-        for (const auto& [d, syms] : f.symbolsToRefine)
+        for (const Scope* stale = staleScope; stale; stale = stale->parent.get())
         {
-            for (const Scope* stale = staleScope; stale; stale = stale->parent.get())
+            if (auto res = stale->refinements.find(syms); res != stale->refinements.end())
             {
-                if (auto res = stale->refinements.find(syms); res != stale->refinements.end())
-                {
-                    destScope->rvalueRefinements[d] = Luau::cloneIncremental(res->second, *destArena, cloneState, destScope);
-                    // If we've found a refinement, just break, otherwise we might end up doing the wrong thing for:
-                    //
-                    //  type TaggedUnion = { tag: 'a', value: number } | { tag: 'b', value: string }
-                    //  local function foobar(obj: TaggedUnion?)
-                    //      if obj then
-                    //          if obj.tag == 'a'
-                    //              obj.| -- We want the most "narrow" refinement here.
-                    //          end
-                    //      end
-                    //  end
-                    //
-                    // We could find another binding for `syms` and then set _that_.
-                    if (FFlag::LuauFragmentAutocompleteTakesInnermostRefinement)
-                        break;
-                }
-            }
-        }
-    }
-    else if (!staleModule->checkedInNewSolver)
-    {
-        for (const auto& [d, loc] : f.localBindingsReferenced)
-        {
-            for (const Scope* stale = staleScope; stale; stale = stale->parent.get())
-            {
-                if (auto res = stale->refinements.find(Symbol(loc)); res != stale->refinements.end())
-                {
-                    destScope->rvalueRefinements[d] = Luau::cloneIncremental(res->second, *destArena, cloneState, destScope);
-                    break;
-                }
+                destScope->rvalueRefinements[d] = Luau::cloneIncremental(res->second, *destArena, cloneState, destScope);
+                // If we've found a refinement, just break, otherwise we might end up doing the wrong thing for:
+                //
+                //  type TaggedUnion = { tag: 'a', value: number } | { tag: 'b', value: string }
+                //  local function foobar(obj: TaggedUnion?)
+                //      if obj then
+                //          if obj.tag == 'a'
+                //              obj.| -- We want the most "narrow" refinement here.
+                //          end
+                //      end
+                //  end
+                //
+                // We could find another binding for `syms` and then set _that_.
+                break;
             }
         }
     }
@@ -1505,61 +1483,31 @@ FragmentAutocompleteStatusResult tryFragmentAutocomplete(
     StringCompletionCallback stringCompletionCB
 )
 {
-    if (FFlag::LuauSuggestHotComments)
+    bool isInHotComment = isWithinHotComment(context.freshParse.hotcomments, cursorPosition);
+    if (isWithinComment(context.freshParse.commentLocations, cursorPosition) && !isInHotComment)
+        return {FragmentAutocompleteStatus::Success, std::nullopt};
+    // TODO: we should calculate fragmentEnd position here, by using context.newAstRoot and cursorPosition
+    try
     {
-        bool isInHotComment = isWithinHotComment(context.freshParse.hotcomments, cursorPosition);
-        if (isWithinComment(context.freshParse.commentLocations, cursorPosition) && !isInHotComment)
-            return {FragmentAutocompleteStatus::Success, std::nullopt};
-        // TODO: we should calculate fragmentEnd position here, by using context.newAstRoot and cursorPosition
-        try
-        {
-            Luau::FragmentAutocompleteResult fragmentAutocomplete = Luau::fragmentAutocomplete(
-                frontend,
-                context.newSrc,
-                moduleName,
-                cursorPosition,
-                context.opts,
-                std::move(stringCompletionCB),
-                context.DEPRECATED_fragmentEndPosition,
-                context.freshParse.root,
-                context.reporter,
-                isInHotComment
-            );
-            return {FragmentAutocompleteStatus::Success, std::move(fragmentAutocomplete)};
-        }
-        catch (const Luau::InternalCompilerError& e)
-        {
-            if (FFlag::DebugLogFragmentsFromAutocomplete)
-                logLuau("tryFragmentAutocomplete exception", e.what());
-            return {FragmentAutocompleteStatus::InternalIce, std::nullopt};
-        }
+        Luau::FragmentAutocompleteResult fragmentAutocomplete = Luau::fragmentAutocomplete(
+            frontend,
+            context.newSrc,
+            moduleName,
+            cursorPosition,
+            context.opts,
+            std::move(stringCompletionCB),
+            context.DEPRECATED_fragmentEndPosition,
+            context.freshParse.root,
+            context.reporter,
+            isInHotComment
+        );
+        return {FragmentAutocompleteStatus::Success, std::move(fragmentAutocomplete)};
     }
-    else
+    catch (const Luau::InternalCompilerError& e)
     {
-        if (isWithinComment(context.freshParse.commentLocations, cursorPosition))
-            return {FragmentAutocompleteStatus::Success, std::nullopt};
-        // TODO: we should calculate fragmentEnd position here, by using context.newAstRoot and cursorPosition
-        try
-        {
-            Luau::FragmentAutocompleteResult fragmentAutocomplete = Luau::fragmentAutocomplete(
-                frontend,
-                context.newSrc,
-                moduleName,
-                cursorPosition,
-                context.opts,
-                std::move(stringCompletionCB),
-                context.DEPRECATED_fragmentEndPosition,
-                context.freshParse.root,
-                context.reporter
-            );
-            return {FragmentAutocompleteStatus::Success, std::move(fragmentAutocomplete)};
-        }
-        catch (const Luau::InternalCompilerError& e)
-        {
-            if (FFlag::DebugLogFragmentsFromAutocomplete)
-                logLuau("tryFragmentAutocomplete exception", e.what());
-            return {FragmentAutocompleteStatus::InternalIce, std::nullopt};
-        }
+        if (FFlag::DebugLogFragmentsFromAutocomplete)
+            logLuau("tryFragmentAutocomplete exception", e.what());
+        return {FragmentAutocompleteStatus::InternalIce, std::nullopt};
     }
 }
 
@@ -1598,7 +1546,7 @@ FragmentAutocompleteResult fragmentAutocomplete(
         cursorPosition,
         frontend.fileResolver,
         std::move(callback),
-        FFlag::LuauSuggestHotComments && isInHotComment
+        isInHotComment
     );
     freeze(tcResult.incrementalModule->internalTypes);
     reportWaypoint(reporter, FragmentAutocompleteWaypoint::AutocompleteEnd);

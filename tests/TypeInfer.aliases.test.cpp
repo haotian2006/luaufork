@@ -10,7 +10,6 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauSolverAgnosticStringification)
 LUAU_FASTFLAG(LuauInitializeDefaultGenericParamsAtProgramPoint)
 LUAU_FASTFLAG(LuauAddErrorCaseForIncompatibleTypePacks)
 
@@ -309,7 +308,6 @@ TEST_CASE_FIXTURE(Fixture, "dont_stop_typechecking_after_reporting_duplicate_typ
 
 TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_type")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
 
     CheckResult result = check(R"(
         type Table<T> = { a: T }
@@ -327,7 +325,6 @@ TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_typ
 
 TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_type2")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
 
     CheckResult result = check(R"(
         type Table<T> = { a: T }
@@ -343,9 +340,9 @@ TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_typ
     CHECK_EQ(getBuiltins()->numberType, tm->givenType);
 }
 
-// Check that recursive intersection type doesn't generate an OOM
 TEST_CASE_FIXTURE(Fixture, "cli_38393_recursive_intersection_oom")
 {
+    // Check that recursive intersection type doesn't generate an OOM
     CheckResult result = check(R"(
         function _(l0:(t0)&((t0)&(((t0)&((t0)->()))->(typeof(_),typeof(# _)))),l39,...):any
         end
@@ -589,7 +586,6 @@ type Cool = typeof(c)
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_of_an_imported_recursive_type")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
 
     fileResolver.source["game/A"] = R"(
 export type X = { a: number, b: X? }
@@ -616,7 +612,6 @@ type X = Import.X
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_of_an_imported_recursive_generic_type")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
 
     fileResolver.source["game/A"] = R"(
         export type X<T, U> = { a: T, b: U, C: X<T, U>? }
@@ -838,7 +833,6 @@ TEST_CASE_FIXTURE(Fixture, "generic_typevars_are_not_considered_to_escape_their_
  */
 TEST_CASE_FIXTURE(Fixture, "forward_declared_alias_is_not_clobbered_by_prior_unification_with_any")
 {
-    ScopedFastFlag sff{FFlag::LuauSolverAgnosticStringification, true};
 
     CheckResult result = check(R"(
         local function x()

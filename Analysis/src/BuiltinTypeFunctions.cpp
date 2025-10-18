@@ -17,19 +17,18 @@
 #include "Luau/UserDefinedTypeFunction.h"
 #include "Luau/VisitType.h"
 
-LUAU_FASTFLAG(LuauEagerGeneralization4)
 LUAU_FASTFLAG(DebugLuauEqSatSimplification)
-LUAU_FASTFLAGVARIABLE(LuauDoNotBlockOnStuckTypeFunctions)
 LUAU_DYNAMIC_FASTINT(LuauTypeFamilyApplicationCartesianProductLimit)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
-LUAU_FASTFLAGVARIABLE(LuauRefineOccursCheckDirectRecursion)
 LUAU_FASTFLAG(LuauReduceSetTypeStackPressure)
 
 LUAU_FASTFLAGVARIABLE(LuauRefineNoRefineAlways)
 LUAU_FASTFLAGVARIABLE(LuauRefineDistributesOverUnions)
 LUAU_FASTFLAG(LuauEGFixGenericsList)
 LUAU_FASTFLAG(LuauExplicitSkipBoundTypes)
-LUAU_FASTFLAG(LuauRawGetHandlesNil)
+LUAU_FASTFLAG(LuauNoMoreComparisonTypeFunctions)
+LUAU_FASTFLAGVARIABLE(LuauBuiltinTypeFunctionsArentGlobal)
+LUAU_FASTFLAG(LuauPassBindableGenericsByReference)
 
 namespace Luau
 {
@@ -111,7 +110,10 @@ std::optional<TypeFunctionReductionResult<TypeId>> tryDistributeTypeFunctionApp(
 
         TypeId resultTy = ctx->arena->addType(
             TypeFunctionInstanceType{
-                NotNull{&builtinTypeFunctions().unionFunc},
+                NotNull{
+                    FFlag::LuauBuiltinTypeFunctionsArentGlobal ? &ctx->builtins->typeFunctions->unionFunc
+                                                               : &builtinTypeFunctions_DEPRECATED().unionFunc
+                },
                 std::move(results),
                 {},
             }
@@ -239,7 +241,12 @@ TypeFunctionReductionResult<TypeId> lenTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     // `len` must return a `number`.
@@ -268,8 +275,7 @@ TypeFunctionReductionResult<TypeId> unmTypeFunction(
     if (isPending(operandTy, ctx->solver))
         return {std::nullopt, Reduction::MaybeOk, {operandTy}, {}};
 
-    if (FFlag::LuauEagerGeneralization4)
-        operandTy = follow(operandTy);
+    operandTy = follow(operandTy);
 
     std::shared_ptr<const NormalizedType> normTy = ctx->normalizer->normalize(operandTy);
 
@@ -324,7 +330,13 @@ TypeFunctionReductionResult<TypeId> unmTypeFunction(
     if (!FFlag::LuauEGFixGenericsList)
     {
         Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+        if (FFlag::LuauPassBindableGenericsByReference)
+        {
+            if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+                return {std::nullopt, Reduction::Erroneous, {}, {}};
+        }
+        else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope)
+                      .isSubtype) // TODO: is this the right variance?
             return {std::nullopt, Reduction::Erroneous, {}, {}};
     }
 
@@ -681,7 +693,12 @@ TypeFunctionReductionResult<TypeId> concatTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     return {ctx->builtins->stringType, Reduction::MaybeOk, {}, {}};
@@ -761,30 +778,10 @@ TypeFunctionReductionResult<TypeId> orTypeFunction(
         return {rhsTy, Reduction::MaybeOk, {}, {}};
 
     // check to see if both operand types are resolved enough, and wait to reduce if not
-    if (FFlag::LuauEagerGeneralization4)
-    {
-        if (FFlag::LuauDoNotBlockOnStuckTypeFunctions)
-        {
-            if (isBlockedOrUnsolvedType(lhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
-            else if (isBlockedOrUnsolvedType(rhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
-        }
-        else
-        {
-            if (is<BlockedType, PendingExpansionType, TypeFunctionInstanceType>(lhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
-            else if (is<BlockedType, PendingExpansionType, TypeFunctionInstanceType>(rhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
-        }
-    }
-    else
-    {
-        if (isPending(lhsTy, ctx->solver))
-            return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
-        else if (isPending(rhsTy, ctx->solver))
-            return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
-    }
+    if (isBlockedOrUnsolvedType(lhsTy))
+        return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
+    else if (isBlockedOrUnsolvedType(rhsTy))
+        return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
 
     // Or evalutes to the LHS type if the LHS is truthy, and the RHS type if LHS is falsy.
     SimplifyResult filteredLhs = simplifyIntersection(ctx->builtins, ctx->arena, lhsTy, ctx->builtins->truthyType);
@@ -818,30 +815,10 @@ static TypeFunctionReductionResult<TypeId> comparisonTypeFunction(
     if (lhsTy == instance || rhsTy == instance)
         return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
 
-    if (FFlag::LuauEagerGeneralization4)
-    {
-        if (FFlag::LuauDoNotBlockOnStuckTypeFunctions)
-        {
-            if (isBlockedOrUnsolvedType(lhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
-            else if (isBlockedOrUnsolvedType(rhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
-        }
-        else
-        {
-            if (is<BlockedType, PendingExpansionType, TypeFunctionInstanceType>(lhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
-            else if (is<BlockedType, PendingExpansionType, TypeFunctionInstanceType>(rhsTy))
-                return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
-        }
-    }
-    else
-    {
-        if (isPending(lhsTy, ctx->solver))
-            return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
-        else if (isPending(rhsTy, ctx->solver))
-            return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
-    }
+    if (isBlockedOrUnsolvedType(lhsTy))
+        return {std::nullopt, Reduction::MaybeOk, {lhsTy}, {}};
+    else if (isBlockedOrUnsolvedType(rhsTy))
+        return {std::nullopt, Reduction::MaybeOk, {rhsTy}, {}};
 
     // Algebra Reduction Rules for comparison type functions
     // Note that comparing to never tells you nothing about the other operand
@@ -930,7 +907,12 @@ static TypeFunctionReductionResult<TypeId> comparisonTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
@@ -1059,7 +1041,12 @@ TypeFunctionReductionResult<TypeId> eqTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}}; // occurs check failed
 
     Subtyping subtyping{ctx->builtins, ctx->arena, ctx->simplifier, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
-    if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
+    if (FFlag::LuauPassBindableGenericsByReference)
+    {
+        if (!subtyping.isSubtype(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope, {}).isSubtype)
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    }
+    else if (!subtyping.isSubtype_DEPRECATED(inferredArgPack, instantiatedMmFtv->argTypes, ctx->scope).isSubtype) // TODO: is this the right variance?
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 
     return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
@@ -1195,7 +1182,7 @@ struct RefineTypeScrubber : public Substitution
                     return true;
             }
         }
-        return FFlag::LuauRefineOccursCheckDirectRecursion ? ty == needle : false;
+        return ty == needle;
     }
 
     bool ignoreChildren(TypeId ty) override
@@ -1237,7 +1224,7 @@ struct RefineTypeScrubber : public Substitution
             else
                 return ctx->arena->addType(IntersectionType{newParts.take()});
         }
-        else if (FFlag::LuauRefineOccursCheckDirectRecursion && ty == needle)
+        else if (ty == needle)
             return ctx->builtins->unknownType;
         else
             return ty;
@@ -1336,17 +1323,7 @@ TypeFunctionReductionResult<TypeId> refineTypeFunction(
             return {targetTy, {}};
     }
 
-    bool targetIsPending = false;
-
-    if (FFlag::LuauEagerGeneralization4)
-    {
-        targetIsPending = FFlag::LuauDoNotBlockOnStuckTypeFunctions ? isBlockedOrUnsolvedType(targetTy)
-                                                                    : is<BlockedType, PendingExpansionType, TypeFunctionInstanceType>(targetTy);
-    }
-    else
-    {
-        targetIsPending = isPending(targetTy, ctx->solver);
-    }
+    const bool targetIsPending = isBlockedOrUnsolvedType(targetTy);
 
     // check to see if both operand types are resolved enough, and wait to reduce if not
     if (targetIsPending)
@@ -1436,32 +1413,25 @@ TypeFunctionReductionResult<TypeId> refineTypeFunction(
             if (is<TableType>(target) || isTruthyOrFalsyType(discriminant))
             {
                 SimplifyResult result = simplifyIntersection(ctx->builtins, ctx->arena, target, discriminant);
-                if (FFlag::LuauEagerGeneralization4)
+                // Simplification considers free and generic types to be
+                // 'blocking', but that's not suitable for refine<>.
+                //
+                // If we are only blocked on those types, we consider
+                // the simplification a success and reduce.
+                if (std::all_of(
+                        begin(result.blockedTypes),
+                        end(result.blockedTypes),
+                        [](TypeId v)
+                        {
+                            return is<FreeType, GenericType>(follow(v));
+                        }
+                    ))
                 {
-                    // Simplification considers free and generic types to be
-                    // 'blocking', but that's not suitable for refine<>.
-                    //
-                    // If we are only blocked on those types, we consider
-                    // the simplification a success and reduce.
-                    if (std::all_of(
-                            begin(result.blockedTypes),
-                            end(result.blockedTypes),
-                            [](auto&& v)
-                            {
-                                return is<FreeType, GenericType>(follow(v));
-                            }
-                        ))
-                    {
-                        return {result.result, {}};
-                    }
-                    else
-                        return {nullptr, {result.blockedTypes.begin(), result.blockedTypes.end()}};
+                    return {result.result, {}};
                 }
                 else
-                {
-                    if (!result.blockedTypes.empty())
-                        return {nullptr, {result.blockedTypes.begin(), result.blockedTypes.end()}};
-                }
+                    return {nullptr, {result.blockedTypes.begin(), result.blockedTypes.end()}};
+
                 return {result.result, {}};
             }
 
@@ -1634,11 +1604,23 @@ struct CollectUnionTypeOptions : TypeOnceVisitor
 
     bool visit(TypeId ty, const TypeFunctionInstanceType& tfit) override
     {
-        if (tfit.function->name != builtinTypeFunctions().unionFunc.name)
+        if (FFlag::LuauBuiltinTypeFunctionsArentGlobal)
         {
-            options.insert(ty);
-            blockingTypes.insert(ty);
-            return false;
+            if (tfit.function->name != ctx->builtins->typeFunctions->unionFunc.name)
+            {
+                options.insert(ty);
+                blockingTypes.insert(ty);
+                return false;
+            }
+        }
+        else
+        {
+            if (tfit.function->name != builtinTypeFunctions_DEPRECATED().unionFunc.name)
+            {
+                options.insert(ty);
+                blockingTypes.insert(ty);
+                return false;
+            }
         }
         return true;
     }
@@ -2090,8 +2072,16 @@ bool searchPropsAndIndexer(
         if (auto tfit = get<TypeFunctionInstanceType>(indexType))
         {
             // if we have an index function here, it means we're in a cycle, so let's see if it's well-founded if we tie the knot
-            if (tfit->function.get() == &builtinTypeFunctions().indexFunc)
-                indexType = follow(tblIndexer->indexResultType);
+            if (FFlag::LuauBuiltinTypeFunctionsArentGlobal)
+            {
+                if (tfit->function.get() == &ctx->builtins->typeFunctions->indexFunc)
+                    indexType = follow(tblIndexer->indexResultType);
+            }
+            else
+            {
+                if (tfit->function.get() == &builtinTypeFunctions_DEPRECATED().indexFunc)
+                    indexType = follow(tblIndexer->indexResultType);
+            }
         }
 
         if (isSubtype(ty, indexType, ctx->scope, ctx->builtins, ctx->simplifier, *ctx->ice, SolverMode::New))
@@ -2335,7 +2325,7 @@ TypeFunctionReductionResult<TypeId> indexFunctionImpl(
             for (TypeId ty : *typesToFind)
                 if (!tblIndexInto(ty, *tablesIter, properties, ctx, isRaw))
                 {
-                    if (FFlag::LuauRawGetHandlesNil && isRaw)
+                    if (isRaw)
                         properties.insert(ctx->builtins->nilType);
                     else
                         return {std::nullopt, Reduction::Erroneous, {}, {}};
@@ -2662,7 +2652,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , ltFunc{"lt", ltTypeFunction}
     , leFunc{"le", leTypeFunction}
     , eqFunc{"eq", eqTypeFunction}
-    , refineFunc{"refine", refineTypeFunction, /*canReduceGenerics*/ FFlag::LuauEagerGeneralization4}
+    , refineFunc{"refine", refineTypeFunction, /*canReduceGenerics*/ true}
     , singletonFunc{"singleton", singletonTypeFunction}
     , unionFunc{"union", unionTypeFunction}
     , intersectFunc{"intersect", intersectTypeFunction}
@@ -2723,7 +2713,8 @@ void BuiltinTypeFunctions::addToScope(NotNull<TypeArena> arena, NotNull<Scope> s
 
     scope->exportedTypeBindings[ltFunc.name] = mkBinaryTypeFunctionWithDefault(&ltFunc);
     scope->exportedTypeBindings[leFunc.name] = mkBinaryTypeFunctionWithDefault(&leFunc);
-    scope->exportedTypeBindings[eqFunc.name] = mkBinaryTypeFunctionWithDefault(&eqFunc);
+    if (!FFlag::LuauNoMoreComparisonTypeFunctions)
+        scope->exportedTypeBindings[eqFunc.name] = mkBinaryTypeFunctionWithDefault(&eqFunc);
 
     scope->exportedTypeBindings[keyofFunc.name] = mkUnaryTypeFunction(&keyofFunc);
     scope->exportedTypeBindings[rawkeyofFunc.name] = mkUnaryTypeFunction(&rawkeyofFunc);
@@ -2735,7 +2726,8 @@ void BuiltinTypeFunctions::addToScope(NotNull<TypeArena> arena, NotNull<Scope> s
     scope->exportedTypeBindings[getmetatableFunc.name] = mkUnaryTypeFunction(&getmetatableFunc);
 }
 
-const BuiltinTypeFunctions& builtinTypeFunctions()
+
+const BuiltinTypeFunctions& builtinTypeFunctions_DEPRECATED()
 {
     static std::unique_ptr<const BuiltinTypeFunctions> result = std::make_unique<BuiltinTypeFunctions>();
 
